@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Passcode</title>
+<style>
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ width:100%; height:100%; margin:0; background:#050608; color:#f8fafc; font-family:Inter,system-ui,sans-serif; }
+  body{
+    background:
+      radial-gradient(circle at 15% 5%,rgba(79,70,229,.14),transparent 28%),
+      radial-gradient(circle at 90% 15%,rgba(124,58,237,.10),transparent 25%),
+      radial-gradient(circle at 50% 100%,rgba(37,99,235,.08),transparent 35%),
+      #050608;
+    min-height:100dvh; padding:18px; overflow-y:auto;
+  }
+  .wrap{ max-width:680px; margin:0 auto; display:flex; flex-direction:column; gap:12px; }
+  .glass{
+    background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(255,255,255,.015));
+    border:1px solid rgba(255,255,255,.065);
+    backdrop-filter:blur(28px); -webkit-backdrop-filter:blur(28px);
+    border-radius:16px; padding:14px;
+  }
+  h1{ font-size:18px; font-weight:800; margin:0 0 2px; letter-spacing:-.3px; }
+  .sub{ font-size:9px; color:#94a3b8; font-weight:700; letter-spacing:.14em; text-transform:uppercase; }
+  label{ display:block; font-size:10px; color:#94a3b8; font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin:0 0 4px 2px; }
+  input, select{
+    width:100%; height:42px; border-radius:11px; padding:0 12px;
+    background:rgba(0,0,0,.28); border:1px solid rgba(255,255,255,.08);
+    color:#f8fafc; outline:none; font-size:13px;
+  }
+  input:focus, select:focus{ border-color:rgba(99,102,241,.55); }
+  .row{ display:grid; gap:8px; margin-bottom:10px; }
+  .row.two{ grid-template-columns:1fr 1fr; }
+  .row.three{ grid-template-columns:1fr 1fr 110px; }
+  button{
+    height:42px; border-radius:11px; font-size:11px; font-weight:800;
+    letter-spacing:.04em; cursor:pointer; border:1px solid rgba(255,255,255,.08);
+    color:#e2e8f0; background:rgba(255,255,255,.04);
+  }
+  button.primary{
+    background: linear-gradient(135deg, rgba(89,103,232,.9), rgba(113,71,216,.9));
+    border-color: rgba(167,139,250,.2); color:#fff;
+  }
+  button.small{ height:32px; font-size:9px; padding:0 10px; }
+  button:active{ transform:scale(.985); }
+  button:disabled{ opacity:.45; cursor:not-allowed; }
+  .err{ font-size:10px; color:#f87171; font-weight:700; margin-top:6px; }
+  .hidden{ display:none !important; }
+  .code-box{
+    margin-top:10px; padding:10px; border-radius:12px;
+    background:rgba(34,197,94,.06); border:1px solid rgba(34,197,94,.2);
+  }
+  .code-label{ font-size:8px; color:#4ade80; font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin-bottom:4px; }
+  .code-value{ font-family:ui-monospace,monospace; font-size:16px; font-weight:800; color:#86efac; letter-spacing:.08em; user-select:all; }
+  .list{ display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+  .item{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:9px 11px; border-radius:11px;
+    background:rgba(255,255,255,.025); border:1px solid rgba(255,255,255,.05);
+  }
+  .item-info{ min-width:0; flex:1; }
+  .item-name{ font-size:12px; font-weight:800; margin-bottom:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .item-meta{ font-size:9px; color:#94a3b8; }
+  .badge{ font-size:8px; font-weight:800; text-transform:uppercase; padding:2px 6px; border-radius:5px; }
+  .badge.active{ color:#4ade80; background:rgba(34,197,94,.1); }
+  .badge.expired{ color:#facc15; background:rgba(250,204,21,.1); }
+  .badge.revoked{ color:#f87171; background:rgba(239,68,68,.1); }
+  .del{ width:28px; height:28px; border-radius:8px; background:rgba(239,68,68,.08); border:1px solid rgba(239,68,68,.15); color:#f87171; font-size:12px; display:flex; align-items:center; justify-content:center; }
+  .toast{
+    position:fixed; top:14px; left:50%; transform:translateX(-50%);
+    padding:9px 14px; border-radius:11px; font-size:10px; font-weight:700;
+    background:rgba(15,23,42,.95); border:1px solid rgba(34,197,94,.25); color:#86efac;
+    z-index:9999; max-width:90vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .toast.err{ border-color:rgba(239,68,68,.3); color:#fca5a5; }
+  .footer{ text-align:center; font-size:8px; color:#334155; letter-spacing:.16em; text-transform:uppercase; padding:8px 0; }
+</style>
+<meta property="og:title" content="Passcode">
+<meta name="twitter:title" content="Passcode">
+<meta name="application-name" content="Passcode">
+<meta name="apple-mobile-web-app-title" content="Passcode">
+<meta name="description" content="Pwc">
+<meta property="og:description" content="Pwc">
+<meta name="twitter:description" content="Pwc">
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="./icon.png">
+<meta property="og:image" content="https://mekeirish.github.io/Passcode/icon.png">
+<meta name="twitter:image" content="https://mekeirish.github.io/Passcode/icon.png">
+<meta name="twitter:card" content="summary">
+<meta property="og:url" content="https://mekeirish.github.io/Passcode/">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#020202">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="./icon.png">
+<link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash-1320x2868.png">
+<link rel="apple-touch-startup-image" media="(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash-1206x2622.png">
+<link rel="apple-touch-startup-image" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash-1290x2796.png">
+<link rel="apple-touch-startup-image" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash-1179x2556.png">
+<link rel="apple-touch-startup-image" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash-1284x2778.png">
+<link rel="apple-touch-startup-image" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash-1170x2532.png">
+<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash-1242x2688.png">
+<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="./splash-828x1792.png">
+<link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash-1125x2436.png">
+<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="./splash-1242x2208.png">
+<link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="./splash-750x1334.png">
+<link rel="apple-touch-startup-image" media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="./splash-640x1136.png">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="glass">
+    <h1>PWC — Password Creator</h1>
+    <div class="sub">Console d'administration multi-PWA</div>
+  </div>
+
+  <div class="glass">
+    <label>URL du Worker</label>
+    <input id="workerUrl" type="url" placeholder="https://mon-worker.xxx.workers.dev" autocomplete="off" spellcheck="false">
+    <label style="margin-top:10px;">Token administrateur</label>
+    <input id="adminToken" type="password" placeholder="ADMIN_TOKEN (jamais stocké)" autocomplete="off" spellcheck="false">
+    <div class="row two" style="margin-top:10px;">
+      <button class="primary" onclick="connect()">Se connecter</button>
+      <button onclick="disconnect()">Déconnecter</button>
+    </div>
+    <div id="authErr" class="err hidden"></div>
+  </div>
+
+  <div id="panel" class="glass hidden">
+    <label>URL GitHub Pages de l'application cible</label>
+    <input id="appUrl" type="url" placeholder="https://user.github.io/mon-app/" autocomplete="off" spellcheck="false">
+    <div class="row three" style="margin-top:10px;">
+      <div>
+        <label>Utilisateur</label>
+        <input id="userLabel" type="text" placeholder="ex: Jean" autocomplete="off">
+      </div>
+      <div>
+        <label>Durée (jours, 0 = ∞)</label>
+        <input id="days" type="number" min="0" max="3650" value="30">
+      </div>
+      <div style="display:flex; align-items:flex-end;">
+        <button class="primary" style="width:100%;" onclick="createCode()">Créer</button>
+      </div>
+    </div>
+
+    <div id="newCodeBox" class="code-box hidden">
+      <div class="code-label">Code créé — copiez-le maintenant</div>
+      <div id="newCodeValue" class="code-value"></div>
+      <div class="row two" style="margin-top:8px; margin-bottom:0;">
+        <button class="small" onclick="copyNewCode()">Copier le code</button>
+        <button class="small" onclick="sendToAI()">Send IA</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="listPanel" class="glass hidden">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+      <div class="sub">Codes existants</div>
+      <button class="small" onclick="loadCodes()">Rafraîchir</button>
+    </div>
+    <label>Filtrer par application (URL GitHub Pages)</label>
+    <input id="filterApp" type="url" placeholder="laisser vide = tous" autocomplete="off" spellcheck="false">
+    <div id="list" class="list"></div>
+  </div>
+
+  <div id="consolePanel" class="glass hidden" style="margin-top:12px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+      <div class="sub">Console</div>
+      <div style="display:flex;gap:6px;">
+        <button class="small" onclick="copyConsole()">Copier</button>
+        <button class="small" onclick="clearConsole()">Vider</button>
+      </div>
+    </div>
+    <div id="consoleOutput" style="font-family:ui-monospace,monospace;font-size:10px;line-height:1.5;color:#cbd5e1;background:rgba(0,0,0,.35);border-radius:10px;padding:8px;max-height:240px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;"></div>
+  </div>
+
+  <div class="footer">PWC · Password Creator</div>
+</div>
+
+<script>
+const LS_WORKER = 'pwc_worker_url';
+const LS_APP = 'pwc_app_url';
+let adminToken = '';
+let lastCode = '';
+
+const byId = id => document.getElementById(id);
+
+function toast(msg, isErr) {
+  const old = document.querySelector('.toast'); if (old) old.remove();
+  const el = document.createElement('div');
+  el.className = 'toast' + (isErr ? ' err' : '');
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+function log(msg, type) {
+  type = type || 'info';
+  const el = byId('consoleOutput');
+  if (!el) return;
+  const panel = byId('consolePanel');
+  if (panel) panel.classList.remove('hidden');
+  const colors = { info: '#cbd5e1', ok: '#4ade80', warn: '#facc15', err: '#f87171' };
+  const time = new Date().toLocaleTimeString('fr-FR');
+  const line = document.createElement('div');
+  line.style.color = colors[type] || colors.info;
+  line.textContent = '[' + time + '] ' + msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+  try { console.log('[PWC]', msg); } catch (e) {}
+}
+
+function clearConsole() {
+  const el = byId('consoleOutput');
+  if (el) el.innerHTML = '';
+}
+
+async function copyConsole() {
+  const el = byId('consoleOutput');
+  if (!el) return;
+  try {
+    await navigator.clipboard.writeText(el.innerText || '');
+    toast('Rapport copié');
+  } catch (e) {
+    toast('Copie impossible', true);
+  }
+}
+
+function workerUrl() {
+  return (byId('workerUrl').value || '').trim().replace(/\/+$/, '');
+}
+
+function saveWorkerUrl() {
+  const u = workerUrl();
+  if (u) localStorage.setItem(LS_WORKER, u);
+}
+
+function saveAppUrl() {
+  const u = (byId('appUrl').value || '').trim();
+  if (u) localStorage.setItem(LS_APP, u);
+}
+
+async function connect() {
+  const err = byId('authErr');
+  err.classList.add('hidden');
+  const token = (byId('adminToken').value || '').trim();
+  const base = workerUrl();
+  log('Tentative de connexion…', 'info');
+  log('URL Worker : ' + (base || '(vide)'), 'info');
+  log('Token : ' + (token ? '(fourni, ' + token.length + ' caractères)' : '(vide)'), 'info');
+  if (!base) { err.textContent = 'URL du Worker requise'; err.classList.remove('hidden'); log('Échec : URL Worker vide', 'err'); return; }
+  if (!token) { err.textContent = 'Token requis'; err.classList.remove('hidden'); log('Échec : token vide', 'err'); return; }
+  saveWorkerUrl();
+  try {
+    log('Appel GET ' + base + '/admin/codes', 'info');
+    const t0 = Date.now();
+    const resp = await fetch(base + '/admin/codes', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    log('Réponse HTTP ' + resp.status + ' en ' + (Date.now() - t0) + ' ms', resp.ok ? 'ok' : 'warn');
+    if (resp.status === 401 || resp.status === 403) {
+      err.textContent = 'Token invalide';
+      err.classList.remove('hidden');
+      log('Échec : token refusé par le Worker', 'err');
+      return;
+    }
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      log('Corps de la réponse : ' + text.slice(0, 200), 'err');
+      throw new Error('HTTP ' + resp.status);
+    }
+    const data = await resp.json();
+    log('JSON reçu : ' + JSON.stringify(data).slice(0, 200), 'ok');
+    adminToken = token;
+    byId('adminToken').value = '';
+    byId('panel').classList.remove('hidden');
+    byId('listPanel').classList.remove('hidden');
+    log('Connecté avec succès', 'ok');
+    toast('Connecté');
+    loadCodes();
+  } catch (e) {
+    log('Exception : ' + (e.message || e), 'err');
+    err.textContent = 'Connexion impossible (' + (e.message || 'erreur') + ')';
+    err.classList.remove('hidden');
+  }
+}
+
+function disconnect() {
+  adminToken = '';
+  byId('panel').classList.add('hidden');
+  byId('listPanel').classList.add('hidden');
+  byId('newCodeBox').classList.add('hidden');
+  byId('authErr').classList.add('hidden');
+  log('Déconnecté', 'info');
+  toast('Déconnecté');
+}
+
+async function createCode() {
+  const err = byId('authErr');
+  err.classList.add('hidden');
+  if (!adminToken) { toast('Non authentifié', true); return; }
+  const base = workerUrl();
+  const app = (byId('appUrl').value || '').trim();
+  const label = (byId('userLabel').value || '').trim();
+  const days = parseInt(byId('days').value, 10);
+  if (!app) { toast('URL GitHub Pages requise', true); return; }
+  if (!label) { toast('Utilisateur requis', true); return; }
+  saveAppUrl();
+  const body = { label: label, app: app };
+  if (!isNaN(days) && days > 0) body.expiresInDays = days;
+  try {
+    log('Création code : ' + JSON.stringify(body), 'info');
+    const resp = await fetch(base + '/admin/codes', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + adminToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    log('Réponse HTTP ' + resp.status, resp.ok ? 'ok' : 'warn');
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      throw new Error(d.error || ('HTTP ' + resp.status));
+    }
+    const data = await resp.json();
+    lastCode = data.code;
+    byId('newCodeValue').textContent = data.code;
+    byId('newCodeBox').classList.remove('hidden');
+    byId('userLabel').value = '';
+    log('Code créé : ' + data.code, 'ok');
+    toast('Code créé');
+    loadCodes();
+  } catch (e) {
+    log('Erreur création : ' + (e.message || e), 'err');
+    toast('Création impossible : ' + (e.message || ''), true);
+  }
+}
+
+async function copyNewCode() {
+  try {
+    await navigator.clipboard.writeText(lastCode);
+    toast('Code copié');
+  } catch (e) {
+    toast('Copie impossible', true);
+  }
+}
+
+async function sendToAI() {
+  const base = workerUrl();
+  const app = (byId('appUrl').value || '').trim();
+  const code = lastCode;
+  if (!base || !app || !code) { toast('Code ou URL manquante', true); return; }
+  const prompt = [
+    'Tu es un développeur web expert. Voici une PWA (code source ci-dessous).',
+    '',
+    'Objectif : ajouter une protection par code d\'accès AVANT le lancement de l\'application.',
+    '',
+    'Comportement attendu :',
+    '1. Au chargement de la page, si aucun code valide n\'a été fourni pour cette session, afficher un écran de saisie (overlay plein écran, design cohérent avec la PWA).',
+    '2. Quand l\'utilisateur soumet un code, appeler l\'API :',
+    '   POST ' + base + '/verify',
+    '   Content-Type: application/json',
+    '   Body : {"code":"<code saisi>"}',
+    '3. Si la réponse est {"valid":true}, masquer l\'écran et laisser la PWA démarrer normalement.',
+    '4. Si {"valid":false}, afficher un message d\'erreur "Code invalide" et vider le champ.',
+    '5. Si la requête échoue (réseau, HTTP 429), afficher un message clair et ne PAS laisser passer.',
+    '6. Ne PAS stocker le code dans localStorage : il doit être redemandé à chaque chargement de page.',
+    '7. Le code source ne doit pas être cassé : préserve toutes les fonctionnalités existantes, la structure HTML, les styles et le JS. Insère uniquement l\'overlay et la logique de vérification.',
+    '8. L\'overlay doit être en position fixed, z-index élevé, avec un champ mot de passe, un bouton "Déverrouiller", et un état d\'erreur.',
+    '',
+    'Application cible : ' + app,
+    'Worker de vérification : ' + base,
+    '',
+    'Voici le code source de la PWA à modifier :',
+    '',
+    '```html',
+    '<collez ici le code source de votre PWA>',
+    '```'
+  ].join('\n');
+  try {
+    await navigator.clipboard.writeText(prompt);
+    toast('Prompt copié — collez-le dans votre IA');
+  } catch (e) {
+    toast('Copie impossible', true);
+  }
+}
+
+async function loadCodes() {
+  if (!adminToken) return;
+  const base = workerUrl();
+  const filter = (byId('filterApp').value || '').trim();
+  const url = base + '/admin/codes' + (filter ? ('?app=' + encodeURIComponent(filter)) : '');
+  const list = byId('list');
+  list.innerHTML = '<div class="item-meta" style="text-align:center;padding:8px;">Chargement...</div>';
+  try {
+    const resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + adminToken } });
+    log('GET ' + url + ' → ' + resp.status, resp.ok ? 'ok' : 'warn');
+    if (resp.status === 401 || resp.status === 403) { disconnect(); return; }
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    const codes = (data && data.codes) || [];
+    list.innerHTML = '';
+    if (codes.length === 0) {
+      list.innerHTML = '<div class="item-meta" style="text-align:center;padding:8px;">Aucun code</div>';
+      return;
+    }
+    codes.forEach(c => {
+      const item = document.createElement('div');
+      item.className = 'item';
+      const created = new Date(c.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      const exp = c.expires_at ? new Date(c.expires_at).toLocaleDateString('fr-FR') : '∞';
+      item.innerHTML =
+        '<div class="item-info">' +
+          '<div class="item-name">' + escapeHtml(c.label || 'Sans label') + '</div>' +
+          '<div class="item-meta">' + escapeHtml(c.app || '—') + ' · ' + created + ' · exp: ' + exp + '</div>' +
+        '</div>' +
+        '<span class="badge ' + c.status + '">' + c.status + '</span>' +
+        (c.status === 'active' ? '<button class="del" title="Révoquer">✕</button>' : '');
+      const btn = item.querySelector('.del');
+      if (btn) btn.onclick = () => revokeCode(c.id);
+      list.appendChild(item);
+    });
+  } catch (e) {
+    list.innerHTML = '<div class="item-meta" style="text-align:center;padding:8px;color:#f87171;">Erreur de chargement</div>';
+    log('Erreur chargement codes : ' + (e.message || e), 'err');
+  }
+}
+
+async function revokeCode(id) {
+  if (!confirm('Révoquer ce code ?')) return;
+  const base = workerUrl();
+  try {
+    const resp = await fetch(base + '/admin/codes/' + encodeURIComponent(id) + '/revoke', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + adminToken }
+    });
+    log('Révocation → ' + resp.status, resp.ok ? 'ok' : 'warn');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    toast('Code révoqué');
+    loadCodes();
+  } catch (e) {
+    log('Erreur révocation : ' + (e.message || e), 'err');
+    toast('Révocation impossible', true);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+window.addEventListener('error', (e) => {
+  log('Erreur JS : ' + (e.message || 'inconnue') + ' @ ' + (e.filename || '?') + ':' + (e.lineno || '?'), 'err');
+});
+window.addEventListener('unhandledrejection', (e) => {
+  log('Promesse rejetée : ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason)), 'err');
+});
+
+(function init() {
+  log('PWC démarré', 'ok');
+  const savedWorker = localStorage.getItem(LS_WORKER);
+  if (savedWorker) { byId('workerUrl').value = savedWorker; log('URL Worker restaurée : ' + savedWorker, 'info'); }
+  const savedApp = localStorage.getItem(LS_APP);
+  if (savedApp) { byId('appUrl').value = savedApp; log('URL app restaurée : ' + savedApp, 'info'); }
+  log('Prêt. Saisissez le token admin puis cliquez sur Se connecter.', 'info');
+})();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+window.addEventListener('load',()=>{
+navigator.serviceWorker.register('./sw.js').catch(err=>console.error(err));
+});
+}
+</script>
+</body>
+</html>
