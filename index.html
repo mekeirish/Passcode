@@ -61,7 +61,17 @@
     background:rgba(255,255,255,.025); border:1px solid rgba(255,255,255,.05);
   }
   .item-info{ min-width:0; flex:1; }
-  .item-name{ font-size:12px; font-weight:800; margin-bottom:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.item-name{
+  font-size:12px;
+  font-weight:800;
+  margin-bottom:2px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.item-name.expiring{
+  color:#f59e0b;
+}
   .item-meta{ font-size:9px; color:#94a3b8; }
   .badge{ font-size:8px; font-weight:800; text-transform:uppercase; padding:2px 6px; border-radius:5px; }
   .badge.active{ color:#4ade80; background:rgba(34,197,94,.1); }
@@ -75,15 +85,50 @@
     z-index:9999; max-width:90vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
   .toast.err{ border-color:rgba(239,68,68,.3); color:#fca5a5; }
-  .footer{ text-align:center; font-size:8px; color:#334155; letter-spacing:.16em; text-transform:uppercase; padding:8px 0; }
+.footer{
+  text-align:center;
+  font-size:9px;
+  color:#64748b;
+  letter-spacing:.08em;
+  text-transform:none;
+  padding:12px 0;
+}
 .app-filters{
-  display:flex; flex-wrap:nowrap; gap:16px; margin-top:14px; margin-bottom:10px;
-  overflow-x:auto; padding:8px 4px 12px; -webkit-overflow-scrolling:touch;
-  scrollbar-width:thin;
+  display:grid;
+  grid-template-columns:repeat(auto-fill, 88px);
+  justify-content:start;
+  align-items:start;
+  gap:18px 14px;
+  width:100%;
+  box-sizing:border-box;
+  margin-top:18px;
+  margin-bottom:28px;
+  padding:10px 6px 20px;
+  overflow:visible;
+  position:relative;
+  isolation:isolate;
+  clear:both;
 }
 .app-phone{
-  flex:0 0 auto; width:88px; display:flex; flex-direction:column; align-items:center; gap:8px;
-  background:transparent; border:none; padding:0; cursor:pointer; -webkit-tap-highlight-color:transparent;
+  width:88px;
+  min-width:0;
+  max-width:88px;
+  min-height:0;
+  height:auto;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:flex-start;
+  gap:8px;
+  box-sizing:border-box;
+  background:transparent;
+  border:none;
+  padding:0;
+  margin:0;
+  position:relative;
+  z-index:1;
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
 }
 .phone-frame{
   width:72px; height:72px; border-radius:18px; border:2.5px solid rgba(255,255,255,.16);
@@ -129,8 +174,17 @@
   .modal{ align-items:flex-end; padding:0; }
   .modal-content{ border-radius:20px 20px 0 0; max-height:90dvh; }
   .phone-frame{ width:76px; height:76px; border-radius:20px; }
-  .app-phone{ width:92px; }
-  .phone-label{ font-size:12px; max-width:92px; }
+  .app-filters{
+    grid-template-columns:repeat(auto-fill, 76px);
+    gap:14px 10px;
+    margin-bottom:28px;
+    padding-bottom:20px;
+  }
+  .app-phone{
+    width:76px;
+    max-width:76px;
+  }
+  .phone-label{ font-size:12px; max-width:76px; }
   label{ font-size:11px; }
   .sub{ font-size:10px; }
   h1{ font-size:20px; }
@@ -170,22 +224,29 @@
 <body>
 <div class="wrap">
 
-  <div class="glass">
+<div class="glass" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+  <div>
     <h1>PWC — Password Creator</h1>
     <div class="sub">Console d'administration multi-PWA</div>
   </div>
+  <button id="disconnectBtn" class="small hidden" onclick="disconnect()" style="flex:0 0 auto;">
+    Déconnexion
+  </button>
+</div>
 
-  <div class="glass">
-    <label>URL du Worker</label>
-    <input id="workerUrl" type="url" placeholder="https://mon-worker.xxx.workers.dev" autocomplete="off" spellcheck="false">
-    <label style="margin-top:10px;">Token administrateur</label>
-    <input id="adminToken" type="password" placeholder="ADMIN_TOKEN (jamais stocké)" autocomplete="off" spellcheck="false">
-    <div class="row two" style="margin-top:10px;">
-      <button class="primary" onclick="connect()">Se connecter</button>
-      <button onclick="disconnect()">Déconnecter</button>
-    </div>
-    <div id="authErr" class="err hidden"></div>
+<div id="authCard" class="glass">
+  <label>URL du Worker</label>
+  <input id="workerUrl" type="url" placeholder="https://mon-worker.xxx.workers.dev" autocomplete="off" spellcheck="false">
+
+  <label style="margin-top:10px;">Token administrateur</label>
+  <input id="adminToken" type="password" placeholder="ADMIN_TOKEN (jamais stocké)" autocomplete="off" spellcheck="false">
+
+  <div class="row two" style="margin-top:10px;">
+    <button class="primary" onclick="connect()">Se connecter</button>
   </div>
+
+  <div id="authErr" class="err hidden"></div>
+</div>
 
   <div id="panel" class="glass hidden">
     <label>URL GitHub Pages de l'application cible</label>
@@ -225,16 +286,23 @@
     <div id="list" class="list"></div>
   </div>
 
-  <div id="consolePanel" class="glass hidden" style="margin-top:12px;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-      <div class="sub">Console</div>
-      <div style="display:flex;gap:6px;">
-        <button class="small" onclick="copyConsole()">Copier</button>
-        <button class="small" onclick="clearConsole()">Vider</button>
-      </div>
+<div id="consolePanel" class="glass" style="margin-top:12px;">
+
+  <div onclick="const o=byId('consoleOutput');const a=byId('consoleArrow');if(o){const open=o.style.display==='none';o.style.display=open?'block':'none';if(a)a.textContent=open?'▲':'▼';if(open)o.scrollTop=o.scrollHeight;}" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0;cursor:pointer;user-select:none;padding:4px 0;">
+    <div class="sub" style="display:flex;align-items:center;gap:8px;">
+      <span>Console</span>
+      <span id="consoleArrow">▼</span>
     </div>
-    <div id="consoleOutput" style="font-family:ui-monospace,monospace;font-size:10px;line-height:1.5;color:#cbd5e1;background:rgba(0,0,0,.35);border-radius:10px;padding:8px;max-height:240px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;"></div>
+
+    <div style="display:flex;gap:6px;">
+      <button class="small" onclick="event.stopPropagation();copyConsole()">Copier</button>
+      <button class="small" onclick="event.stopPropagation();clearConsole()">Vider</button>
+    </div>
   </div>
+
+  <div id="consoleOutput" style="display:none;font-family:ui-monospace,monospace;font-size:10px;line-height:1.5;color:#cbd5e1;background:rgba(0,0,0,.35);border-radius:10px;padding:8px;max-height:240px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;"></div>
+
+</div>
 
   <div class="footer">PWC · Password Creator</div>
 </div>
@@ -269,18 +337,39 @@ function toast(msg, isErr) {
 
 function log(msg, type) {
   type = type || 'info';
+
   const el = byId('consoleOutput');
   if (!el) return;
+
   const panel = byId('consolePanel');
-  if (panel) panel.classList.remove('hidden');
-  const colors = { info: '#cbd5e1', ok: '#4ade80', warn: '#facc15', err: '#f87171' };
+
+  if (panel && type === 'err') {
+    panel.classList.remove('hidden');
+    el.style.display = 'block';
+
+    const arrow = byId('consoleArrow');
+    if (arrow) arrow.textContent = '▲';
+  }
+
+  const colors = {
+    info: '#cbd5e1',
+    ok: '#4ade80',
+    warn: '#facc15',
+    err: '#f87171'
+  };
+
   const time = new Date().toLocaleTimeString('fr-FR');
   const line = document.createElement('div');
+
   line.style.color = colors[type] || colors.info;
   line.textContent = '[' + time + '] ' + msg;
+
   el.appendChild(line);
   el.scrollTop = el.scrollHeight;
-  try { console.log('[PWC]', msg); } catch (e) {}
+
+  try {
+    console.log('[PWC]', msg);
+  } catch (e) {}
 }
 
 function clearConsole() {
@@ -316,43 +405,82 @@ function saveAppUrl() {
 async function connect() {
   const err = byId('authErr');
   err.classList.add('hidden');
+
   const token = (byId('adminToken').value || '').trim();
   const base = workerUrl();
+
   log('Tentative de connexion…', 'info');
   log('URL Worker : ' + (base || '(vide)'), 'info');
   log('Token : ' + (token ? '(fourni, ' + token.length + ' caractères)' : '(vide)'), 'info');
-  if (!base) { err.textContent = 'URL du Worker requise'; err.classList.remove('hidden'); log('Échec : URL Worker vide', 'err'); return; }
-  if (!token) { err.textContent = 'Token requis'; err.classList.remove('hidden'); log('Échec : token vide', 'err'); return; }
+
+  if (!base) {
+    err.textContent = 'URL du Worker requise';
+    err.classList.remove('hidden');
+    log('Échec : URL Worker vide', 'err');
+    return;
+  }
+
+  if (!token) {
+    err.textContent = 'Token requis';
+    err.classList.remove('hidden');
+    log('Échec : token vide', 'err');
+    return;
+  }
+
   saveWorkerUrl();
+
   try {
     log('Appel GET ' + base + '/admin/codes', 'info');
+
     const t0 = Date.now();
+
     const resp = await fetch(base + '/admin/codes', {
-      headers: { 'Authorization': 'Bearer ' + token }
+      headers: {
+        'Authorization': 'Bearer ' + token
+      }
     });
-    log('Réponse HTTP ' + resp.status + ' en ' + (Date.now() - t0) + ' ms', resp.ok ? 'ok' : 'warn');
+
+    log(
+      'Réponse HTTP ' + resp.status + ' en ' + (Date.now() - t0) + ' ms',
+      resp.ok ? 'ok' : 'warn'
+    );
+
     if (resp.status === 401 || resp.status === 403) {
       err.textContent = 'Token invalide';
       err.classList.remove('hidden');
       log('Échec : token refusé par le Worker', 'err');
       return;
     }
+
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
       log('Corps de la réponse : ' + text.slice(0, 200), 'err');
       throw new Error('HTTP ' + resp.status);
     }
+
     const data = await resp.json();
+
     log('JSON reçu : ' + JSON.stringify(data).slice(0, 200), 'ok');
+
     adminToken = token;
+
     byId('adminToken').value = '';
+
+    byId('authCard').classList.add('hidden');
+    byId('disconnectBtn').classList.remove('hidden');
+
     byId('panel').classList.remove('hidden');
     byId('listPanel').classList.remove('hidden');
+
     log('Connecté avec succès', 'ok');
+
     toast('Connecté');
-    loadCodes();
+
+    await loadCodes();
+
   } catch (e) {
     log('Exception : ' + (e.message || e), 'err');
+
     err.textContent = 'Connexion impossible (' + (e.message || 'erreur') + ')';
     err.classList.remove('hidden');
   }
@@ -360,11 +488,19 @@ async function connect() {
 
 function disconnect() {
   adminToken = '';
+
   byId('panel').classList.add('hidden');
   byId('listPanel').classList.add('hidden');
   byId('newCodeBox').classList.add('hidden');
   byId('authErr').classList.add('hidden');
+
+  byId('authCard').classList.remove('hidden');
+  byId('disconnectBtn').classList.add('hidden');
+
+  byId('adminToken').value = '';
+
   closeCodeModal();
+
   log('Déconnecté', 'info');
   toast('Déconnecté');
 }
@@ -530,30 +666,51 @@ function renderAppFilters(codes) {
 function renderCodes() {
   const list = byId('list');
   if (!list) return;
+
   const filter = (byId('filterApp').value || '').trim();
   let codes = codesCache || [];
+
   if (filter) {
     codes = codes.filter(c => (c.app || '').includes(filter));
   }
+
   list.innerHTML = '';
+
   if (codes.length === 0) {
     list.innerHTML = '<div class="item-meta" style="text-align:center;padding:8px;">Aucun code</div>';
     return;
   }
+
   codes.forEach(c => {
     const item = document.createElement('div');
     item.className = 'item';
     item.style.cursor = 'pointer';
-    const created = new Date(c.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-    const exp = c.expires_at ? new Date(c.expires_at).toLocaleDateString('fr-FR') : '∞';
+
+    const expiresAt = c.expires_at ? new Date(c.expires_at).getTime() : null;
+    const isExpiring =
+      c.status === 'active' &&
+      expiresAt &&
+      expiresAt > Date.now() &&
+      expiresAt - Date.now() < 30 * 24 * 60 * 60 * 1000;
+
+    const exp = expiresAt
+      ? new Date(expiresAt).toLocaleDateString('fr-FR')
+      : '∞';
+
     item.innerHTML =
       '<div class="item-info">' +
-        '<div class="item-name">' + escapeHtml(c.label || 'Sans label') + '</div>' +
-        '<div class="item-meta">' + escapeHtml(c.app || '—') + ' · ' + created + ' · exp: ' + exp + '</div>' +
+        '<div class="item-name' + (isExpiring ? ' expiring' : '') + '">' +
+          escapeHtml(c.label || 'Sans nom') +
+        '</div>' +
+        '<div class="item-meta">Expiration : ' + exp + '</div>' +
       '</div>' +
-      '<span class="badge ' + c.status + '">' + c.status + '</span>' +
-      '<button class="del" title="Supprimer">✕</button>';
+      '<span class="badge ' + escapeHtml(c.status || '') + '">' +
+        escapeHtml(c.status || '—') +
+      '</span>' +
+      '<button class="del" title="Révoquer le code">✕</button>';
+
     item.onclick = () => openCodeModal(c);
+
     const btn = item.querySelector('.del');
     if (btn) {
       btn.onclick = (e) => {
@@ -561,6 +718,7 @@ function renderCodes() {
         revokeCode(c.id);
       };
     }
+
     list.appendChild(item);
   });
 }
@@ -587,20 +745,42 @@ async function loadCodes() {
 }
 
 async function revokeCode(id) {
+  if (!id) return;
   if (!confirm('Révoquer ce code ?')) return;
-  const base = workerUrl();
+
+  const base = workerUrl().replace(/\/+$/, '');
+
   try {
-    const resp = await fetch(base + '/admin/codes/' + encodeURIComponent(id) + '/revoke', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + adminToken }
-    });
+    const resp = await fetch(
+      base + '/admin/codes/' + encodeURIComponent(id) + '/revoke',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + adminToken
+        }
+      }
+    );
+
+    const data = await resp.json().catch(() => ({}));
+
     log('Révocation → ' + resp.status, resp.ok ? 'ok' : 'warn');
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+
+    if (resp.status === 404 && data.error === 'Code introuvable ou déjà révoqué') {
+      toast('Ce code est déjà révoqué ou inexistant', true);
+      await loadCodes();
+      return;
+    }
+
+    if (!resp.ok) {
+      throw new Error(data.error || 'HTTP ' + resp.status);
+    }
+
     toast('Code révoqué');
-    loadCodes();
+    await loadCodes();
+
   } catch (e) {
     log('Erreur révocation : ' + (e.message || e), 'err');
-    toast('Révocation impossible', true);
+    toast('Révocation impossible : ' + (e.message || e), true);
   }
 }
 
@@ -609,28 +789,157 @@ function escapeHtml(s) {
 }
 function openCodeModal(c) {
   if (!c) return;
-  byId('modalTitle').textContent = c.label || 'Sans label';
+
+  byId('modalTitle').textContent = c.label || 'Sans nom';
+
   const body = byId('modalBody');
   const created = new Date(c.created_at).toLocaleString('fr-FR');
-  const exp = c.expires_at ? new Date(c.expires_at).toLocaleString('fr-FR') : 'Jamais (∞)';
+  const expiresAt = c.expires_at ? new Date(c.expires_at).getTime() : null;
+  const exp = expiresAt
+    ? new Date(expiresAt).toLocaleString('fr-FR')
+    : 'Jamais (∞)';
+
+  let duration = 0;
+  if (expiresAt) {
+    duration = Math.max(1, Math.ceil((expiresAt - Date.now()) / 86400000));
+  }
+
+  const editable = c.status !== 'revoked';
+
   body.innerHTML =
     '<div class="modal-row"><span class="modal-label">Identifiant</span><span class="modal-value">' + escapeHtml(c.id || '') + '</span></div>' +
-    '<div class="modal-row"><span class="modal-label">Application</span><span class="modal-value">' + escapeHtml(c.app || '—') + '</span></div>' +
-    '<div class="modal-row"><span class="modal-label">Créé le</span><span class="modal-value">' + created + '</span></div>' +
+    '<div style="margin-top:14px;"><label for="editCodeLabel">Nom</label><input id="editCodeLabel" type="text" maxlength="100" value="' + escapeHtml(c.label || '') + '" ' + (editable ? '' : 'disabled') + ' style="width:100%;margin-top:5px;"></div>' +
+    '<div style="margin-top:12px;"><label for="editCodeApp">URL de l’application</label><input id="editCodeApp" type="url" value="' + escapeHtml(c.app || '') + '" ' + (editable ? '' : 'disabled') + ' style="width:100%;margin-top:5px;"></div>' +
+    '<div style="margin-top:12px;"><label for="editCodeDuration">Durée en jours (0 = illimitée)</label><input id="editCodeDuration" type="number" min="0" max="3650" value="' + duration + '" ' + (editable ? '' : 'disabled') + ' style="width:100%;margin-top:5px;"></div>' +
+    '<div class="modal-row" style="margin-top:14px;"><span class="modal-label">Créé le</span><span class="modal-value">' + created + '</span></div>' +
     '<div class="modal-row"><span class="modal-label">Expire le</span><span class="modal-value">' + exp + '</span></div>' +
-    '<div class="modal-row"><span class="modal-label">Statut</span><span class="modal-value"><span class="badge ' + c.status + '">' + escapeHtml(c.status) + '</span></span></div>';
+    '<div class="modal-row"><span class="modal-label">Statut</span><span class="modal-value"><span class="badge ' + escapeHtml(c.status || '') + '">' + escapeHtml(c.status || '—') + '</span></span></div>';
+
   const actions = byId('modalActions');
   actions.innerHTML = '';
-  const btn = document.createElement('button');
-  btn.className = 'primary';
-  btn.style.flex = '1';
-  btn.textContent = 'Supprimer';
-  btn.onclick = () => {
-    closeCodeModal();
-    revokeCode(c.id);
-  };
-  actions.appendChild(btn);
+
+  if (editable) {
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.style.flex = '1';
+    saveBtn.textContent = 'Enregistrer';
+    saveBtn.onclick = () => saveCodeEdits(c.id);
+    actions.appendChild(saveBtn);
+  }
+
+  const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'del';
+  deleteBtn.style.flex = '1';
+  deleteBtn.style.height = '46px';
+  deleteBtn.textContent = 'Supprimer définitivement';
+  deleteBtn.onclick = () => deleteCode(c.id);
+  actions.appendChild(deleteBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'small';
+  closeBtn.textContent = 'Fermer';
+  closeBtn.onclick = closeCodeModal;
+  actions.appendChild(closeBtn);
+
   byId('codeModal').classList.remove('hidden');
+}
+async function deleteCode(id) {
+  if (!id) return;
+
+  if (!confirm('Supprimer définitivement cet utilisateur et son code d’accès ? Cette action est irréversible.')) {
+    return;
+  }
+
+  try {
+    const base = workerUrl().replace(/\/+$/, '');
+
+    const response = await fetch(
+      base + '/admin/codes/' + encodeURIComponent(id),
+      {
+        method: 'DELETE',
+        headers: {
+          'Authorization': 'Bearer ' + adminToken
+        }
+      }
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Erreur lors de la suppression');
+    }
+
+    closeCodeModal();
+    toast('Utilisateur supprimé définitivement');
+    await loadCodes();
+
+  } catch (error) {
+    toast(error.message || 'Impossible de supprimer cet utilisateur', true);
+  }
+}
+async function saveCodeEdits(id) {
+  const label = (byId('editCodeLabel').value || '').trim();
+  const app = (byId('editCodeApp').value || '').trim();
+  const expiresInDays = Number(byId('editCodeDuration').value);
+
+  if (!label) {
+    toast('Le nom est obligatoire', true);
+    return;
+  }
+
+  if (!app) {
+    toast('L’URL de l’application est obligatoire', true);
+    return;
+  }
+
+  if (!Number.isInteger(expiresInDays) || expiresInDays < 0 || expiresInDays > 3650) {
+    toast('La durée doit être comprise entre 0 et 3650 jours', true);
+    return;
+  }
+
+  const base = workerUrl().replace(/\/+$/, '');
+  const btn = byId('modalActions').querySelector('.primary');
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Enregistrement…';
+  }
+
+  try {
+    const response = await fetch(
+      base + '/admin/codes/' + encodeURIComponent(id),
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + adminToken
+        },
+        body: JSON.stringify({
+          label,
+          app,
+          expiresInDays
+        })
+      }
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Erreur lors de la modification');
+    }
+
+    toast('Modifications enregistrées');
+    closeCodeModal();
+    await loadCodes();
+
+  } catch (error) {
+    toast(error.message || 'Impossible d’enregistrer les modifications', true);
+
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Enregistrer';
+    }
+  }
 }
 function closeCodeModal() {
   const m = byId('codeModal');
@@ -638,10 +947,22 @@ function closeCodeModal() {
 }
 
 window.addEventListener('error', (e) => {
-  log('Erreur JS : ' + (e.message || 'inconnue') + ' @ ' + (e.filename || '?') + ':' + (e.lineno || '?'), 'err');
+  log(
+    'Erreur JS : ' +
+    (e.message || 'inconnue') +
+    ' @ ' +
+    (e.filename || '?') +
+    ':' +
+    (e.lineno || '?'),
+    'err'
+  );
 });
 window.addEventListener('unhandledrejection', (e) => {
-  log('Promesse rejetée : ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason)), 'err');
+  log(
+    'Promesse rejetée : ' +
+    (e.reason && e.reason.message ? e.reason.message : String(e.reason)),
+    'err'
+  );
 });
 
 (function init() {
