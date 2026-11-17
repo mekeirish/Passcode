@@ -76,6 +76,65 @@
   }
   .toast.err{ border-color:rgba(239,68,68,.3); color:#fca5a5; }
   .footer{ text-align:center; font-size:8px; color:#334155; letter-spacing:.16em; text-transform:uppercase; padding:8px 0; }
+.app-filters{
+  display:flex; flex-wrap:nowrap; gap:16px; margin-top:14px; margin-bottom:10px;
+  overflow-x:auto; padding:8px 4px 12px; -webkit-overflow-scrolling:touch;
+  scrollbar-width:thin;
+}
+.app-phone{
+  flex:0 0 auto; width:88px; display:flex; flex-direction:column; align-items:center; gap:8px;
+  background:transparent; border:none; padding:0; cursor:pointer; -webkit-tap-highlight-color:transparent;
+}
+.phone-frame{
+  width:72px; height:72px; border-radius:18px; border:2.5px solid rgba(255,255,255,.16);
+  background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center;
+  overflow:hidden; position:relative; box-shadow:0 4px 14px rgba(0,0,0,.4);
+  flex-shrink:0;
+}
+.phone-fallback{
+  display:none; width:100%; height:100%; align-items:center; justify-content:center;
+  font-size:26px; font-weight:800; color:#94a3b8; background:rgba(255,255,255,.07);
+}
+.phone-frame-all{ background:rgba(99,102,241,.16); border-style:dashed; }
+.phone-all-text{ font-size:14px; font-weight:800; color:#a5b4fc; letter-spacing:.03em; }
+.phone-label{
+  font-size:11px; font-weight:700; color:#94a3b8; text-align:center; line-height:1.2;
+  max-width:88px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.modal{
+  position:fixed; inset:0; z-index:10000; display:flex; align-items:flex-end; justify-content:center;
+  padding:12px; background:rgba(0,0,0,.55); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+}
+.modal-content{
+  width:100%; max-width:420px; max-height:85dvh; overflow-y:auto;
+  border-radius:18px 18px 14px 14px; padding:16px;
+}
+.modal-header{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+.modal-title{ font-size:16px; font-weight:800; margin:0; letter-spacing:-.2px; }
+.modal-row{
+  display:flex; justify-content:space-between; align-items:flex-start; gap:10px;
+  padding:9px 0; border-bottom:1px solid rgba(255,255,255,.05); font-size:12px;
+}
+.modal-label{ color:#94a3b8; font-weight:700; font-size:10px; text-transform:uppercase; letter-spacing:.08em; flex-shrink:0; }
+.modal-value{ font-weight:600; text-align:right; word-break:break-all; }
+@media (max-width:480px){
+  body{ padding:12px; }
+  .row.two, .row.three{ grid-template-columns:1fr; }
+  .row.three > div:last-child{ margin-top:2px; }
+  .item{ padding:14px 12px; }
+  .item-name{ font-size:14px; }
+  .item-meta{ font-size:11px; }
+  button{ height:46px; font-size:12px; }
+  button.small{ height:38px; font-size:11px; }
+  .modal{ align-items:flex-end; padding:0; }
+  .modal-content{ border-radius:20px 20px 0 0; max-height:90dvh; }
+  .phone-frame{ width:76px; height:76px; border-radius:20px; }
+  .app-phone{ width:92px; }
+  .phone-label{ font-size:12px; max-width:92px; }
+  label{ font-size:11px; }
+  .sub{ font-size:10px; }
+  h1{ font-size:20px; }
+}
 </style>
 <meta property="og:title" content="Passcode">
 <meta name="twitter:title" content="Passcode">
@@ -162,6 +221,7 @@
     </div>
     <label>Filtrer par application (URL GitHub Pages)</label>
     <input id="filterApp" type="url" placeholder="laisser vide = tous" autocomplete="off" spellcheck="false">
+<div id="appFilters" class="app-filters"></div>
     <div id="list" class="list"></div>
   </div>
 
@@ -178,12 +238,23 @@
 
   <div class="footer">PWC · Password Creator</div>
 </div>
+<div id="codeModal" class="modal hidden">
+  <div class="modal-content glass">
+    <div class="modal-header">
+      <h2 class="modal-title" id="modalTitle">Détails</h2>
+      <button class="del" onclick="closeCodeModal()" title="Fermer">✕</button>
+    </div>
+    <div id="modalBody"></div>
+    <div id="modalActions" style="margin-top:14px;display:flex;gap:8px;"></div>
+  </div>
+</div>
 
 <script>
 const LS_WORKER = 'pwc_worker_url';
 const LS_APP = 'pwc_app_url';
 let adminToken = '';
 let lastCode = '';
+let codesCache = [];
 
 const byId = id => document.getElementById(id);
 
@@ -293,6 +364,7 @@ function disconnect() {
   byId('listPanel').classList.add('hidden');
   byId('newCodeBox').classList.add('hidden');
   byId('authErr').classList.add('hidden');
+  closeCodeModal();
   log('Déconnecté', 'info');
   toast('Déconnecté');
 }
@@ -385,11 +457,117 @@ async function sendToAI() {
   }
 }
 
+function renderAppFilters(codes) {
+  const el = byId('appFilters');
+  if (!el) return;
+  const apps = [...new Set((codes || []).map(c => c.app).filter(Boolean))].sort();
+  const current = (byId('filterApp').value || '').trim();
+  el.innerHTML = '';
+
+  const allBtn = document.createElement('button');
+  allBtn.type = 'button';
+  allBtn.className = 'app-phone' + (current === '' ? ' active' : '');
+  allBtn.innerHTML =
+    '<div class="phone-frame phone-frame-all"><span class="phone-all-text">Tous</span></div>' +
+    '<div class="phone-label">Tous</div>';
+  allBtn.onclick = () => {
+    byId('filterApp').value = '';
+    renderCodes();
+  };
+  el.appendChild(allBtn);
+
+  apps.forEach(app => {
+    let iconUrl = '';
+    let short = app;
+    try {
+      const u = new URL(app);
+      const path = u.pathname.replace(/\/+$/, '') || '';
+      iconUrl = u.origin + path + '/icon.png';
+      const parts = path.split('/').filter(Boolean);
+      short = parts.length ? parts[parts.length - 1] : u.hostname.replace(/^www\./, '');
+    } catch (e) {}
+
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'app-phone' + (current === app ? ' active' : '');
+    chip.title = app;
+
+    const frame = document.createElement('div');
+    frame.className = 'phone-frame';
+
+    const img = document.createElement('img');
+    img.src = iconUrl;
+    img.alt = short;
+    img.loading = 'lazy';
+    img.decoding = 'async';
+
+    const fallback = document.createElement('div');
+    fallback.className = 'phone-fallback';
+    fallback.textContent = (short || '?').charAt(0).toUpperCase();
+    fallback.style.display = 'none';
+
+    img.onerror = () => {
+      img.style.display = 'none';
+      fallback.style.display = 'flex';
+    };
+
+    frame.appendChild(img);
+    frame.appendChild(fallback);
+
+    const label = document.createElement('div');
+    label.className = 'phone-label';
+    label.textContent = short.length > 12 ? short.slice(0, 11) + '…' : short;
+
+    chip.appendChild(frame);
+    chip.appendChild(label);
+    chip.onclick = () => {
+      byId('filterApp').value = app;
+      renderCodes();
+    };
+    el.appendChild(chip);
+  });
+}
+function renderCodes() {
+  const list = byId('list');
+  if (!list) return;
+  const filter = (byId('filterApp').value || '').trim();
+  let codes = codesCache || [];
+  if (filter) {
+    codes = codes.filter(c => (c.app || '').includes(filter));
+  }
+  list.innerHTML = '';
+  if (codes.length === 0) {
+    list.innerHTML = '<div class="item-meta" style="text-align:center;padding:8px;">Aucun code</div>';
+    return;
+  }
+  codes.forEach(c => {
+    const item = document.createElement('div');
+    item.className = 'item';
+    item.style.cursor = 'pointer';
+    const created = new Date(c.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    const exp = c.expires_at ? new Date(c.expires_at).toLocaleDateString('fr-FR') : '∞';
+    item.innerHTML =
+      '<div class="item-info">' +
+        '<div class="item-name">' + escapeHtml(c.label || 'Sans label') + '</div>' +
+        '<div class="item-meta">' + escapeHtml(c.app || '—') + ' · ' + created + ' · exp: ' + exp + '</div>' +
+      '</div>' +
+      '<span class="badge ' + c.status + '">' + c.status + '</span>' +
+      '<button class="del" title="Supprimer">✕</button>';
+    item.onclick = () => openCodeModal(c);
+    const btn = item.querySelector('.del');
+    if (btn) {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        revokeCode(c.id);
+      };
+    }
+    list.appendChild(item);
+  });
+}
 async function loadCodes() {
   if (!adminToken) return;
   const base = workerUrl();
-  const filter = (byId('filterApp').value || '').trim();
-  const url = base + '/admin/codes' + (filter ? ('?app=' + encodeURIComponent(filter)) : '');
+  const url = base + '/admin/codes';
   const list = byId('list');
   list.innerHTML = '<div class="item-meta" style="text-align:center;padding:8px;">Chargement...</div>';
   try {
@@ -399,27 +577,9 @@ async function loadCodes() {
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
     const codes = (data && data.codes) || [];
-    list.innerHTML = '';
-    if (codes.length === 0) {
-      list.innerHTML = '<div class="item-meta" style="text-align:center;padding:8px;">Aucun code</div>';
-      return;
-    }
-    codes.forEach(c => {
-      const item = document.createElement('div');
-      item.className = 'item';
-      const created = new Date(c.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-      const exp = c.expires_at ? new Date(c.expires_at).toLocaleDateString('fr-FR') : '∞';
-      item.innerHTML =
-        '<div class="item-info">' +
-          '<div class="item-name">' + escapeHtml(c.label || 'Sans label') + '</div>' +
-          '<div class="item-meta">' + escapeHtml(c.app || '—') + ' · ' + created + ' · exp: ' + exp + '</div>' +
-        '</div>' +
-        '<span class="badge ' + c.status + '">' + c.status + '</span>' +
-        (c.status === 'active' ? '<button class="del" title="Révoquer">✕</button>' : '');
-      const btn = item.querySelector('.del');
-      if (btn) btn.onclick = () => revokeCode(c.id);
-      list.appendChild(item);
-    });
+    codesCache = codes;
+    renderAppFilters(codes);
+    renderCodes();
   } catch (e) {
     list.innerHTML = '<div class="item-meta" style="text-align:center;padding:8px;color:#f87171;">Erreur de chargement</div>';
     log('Erreur chargement codes : ' + (e.message || e), 'err');
@@ -447,6 +607,35 @@ async function revokeCode(id) {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+function openCodeModal(c) {
+  if (!c) return;
+  byId('modalTitle').textContent = c.label || 'Sans label';
+  const body = byId('modalBody');
+  const created = new Date(c.created_at).toLocaleString('fr-FR');
+  const exp = c.expires_at ? new Date(c.expires_at).toLocaleString('fr-FR') : 'Jamais (∞)';
+  body.innerHTML =
+    '<div class="modal-row"><span class="modal-label">Identifiant</span><span class="modal-value">' + escapeHtml(c.id || '') + '</span></div>' +
+    '<div class="modal-row"><span class="modal-label">Application</span><span class="modal-value">' + escapeHtml(c.app || '—') + '</span></div>' +
+    '<div class="modal-row"><span class="modal-label">Créé le</span><span class="modal-value">' + created + '</span></div>' +
+    '<div class="modal-row"><span class="modal-label">Expire le</span><span class="modal-value">' + exp + '</span></div>' +
+    '<div class="modal-row"><span class="modal-label">Statut</span><span class="modal-value"><span class="badge ' + c.status + '">' + escapeHtml(c.status) + '</span></span></div>';
+  const actions = byId('modalActions');
+  actions.innerHTML = '';
+  const btn = document.createElement('button');
+  btn.className = 'primary';
+  btn.style.flex = '1';
+  btn.textContent = 'Supprimer';
+  btn.onclick = () => {
+    closeCodeModal();
+    revokeCode(c.id);
+  };
+  actions.appendChild(btn);
+  byId('codeModal').classList.remove('hidden');
+}
+function closeCodeModal() {
+  const m = byId('codeModal');
+  if (m) m.classList.add('hidden');
+}
 
 window.addEventListener('error', (e) => {
   log('Erreur JS : ' + (e.message || 'inconnue') + ' @ ' + (e.filename || '?') + ':' + (e.lineno || '?'), 'err');
@@ -462,6 +651,12 @@ window.addEventListener('unhandledrejection', (e) => {
   const savedApp = localStorage.getItem(LS_APP);
   if (savedApp) { byId('appUrl').value = savedApp; log('URL app restaurée : ' + savedApp, 'info'); }
   log('Prêt. Saisissez le token admin puis cliquez sur Se connecter.', 'info');
+  const modal = byId('codeModal');
+  if (modal) {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeCodeModal();
+    });
+  }
 })();
 </script>
 <script>
