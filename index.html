@@ -251,6 +251,8 @@
   <div id="panel" class="glass hidden">
     <label>URL GitHub Pages de l'application cible</label>
     <input id="appUrl" type="url" placeholder="https://user.github.io/mon-app/" autocomplete="off" spellcheck="false">
+<label style="margin-top:10px;">Code d'accès (vide = généré automatiquement)</label>
+<input id="customCode" type="text" maxlength="64" placeholder="ex: jean2026" autocomplete="off" spellcheck="false">
     <div class="row three" style="margin-top:10px;">
       <div>
         <label>Utilisateur</label>
@@ -273,6 +275,38 @@
         <button class="small" onclick="sendToAI()">Send IA</button>
       </div>
     </div>
+<div id="ghPanel" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06);">
+  <div class="sub" style="margin-bottom:8px;">Protéger une application (GitHub)</div>
+
+  <label>Token GitHub</label>
+  <div style="display:flex;gap:8px;">
+    <input id="ghTokenInput" type="password" placeholder="github_pat_… ou ghp_…" autocomplete="off" spellcheck="false" style="min-width:0;">
+    <button class="small" style="height:42px;flex:0 0 auto;" onclick="ghSaveToken()">Enregistrer</button>
+  </div>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;">
+    <div id="ghTokenStatus" class="item-meta"></div>
+    <button class="small" onclick="ghClearToken()">Effacer</button>
+  </div>
+
+  <label style="margin-top:10px;">Application (repo)</label>
+  <div style="display:flex;gap:8px;">
+    <select id="ghRepo" style="min-width:0;color-scheme:dark;">
+      <option value="">— charger mes repos —</option>
+    </select>
+    <button class="small" style="height:42px;flex:0 0 auto;" onclick="ghLoadRepos()">Charger</button>
+  </div>
+
+  <button id="ghInstallBtn" class="primary" style="width:100%;margin-top:10px;" onclick="ghInstall()">Installer le module de protection</button>
+
+  <div id="ghProgress" class="hidden" style="margin-top:10px;">
+    <div id="ghProgressText" class="item-meta" style="margin-bottom:6px;"></div>
+    <div style="height:6px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden;">
+      <div id="ghProgressBar" style="height:100%;width:0;background:linear-gradient(135deg,rgba(89,103,232,.9),rgba(113,71,216,.9));transition:width .5s linear;"></div>
+    </div>
+  </div>
+
+  <button id="ghOpenBtn" class="primary hidden" style="width:100%;margin-top:10px;" onclick="ghOpenApp()">Ouvrir l'application</button>
+</div>
   </div>
 
   <div id="listPanel" class="glass hidden">
@@ -323,6 +357,9 @@ const LS_APP = 'pwc_app_url';
 let adminToken = '';
 let lastCode = '';
 let codesCache = [];
+const LS_GH_TOKEN = 'pwc_gh_token';
+const LS_GH_REPO = 'pwc_gh_repo';
+const ghState = { busy: false, openUrl: '' };
 
 const byId = id => document.getElementById(id);
 
@@ -512,11 +549,17 @@ async function createCode() {
   const base = workerUrl();
   const app = (byId('appUrl').value || '').trim();
   const label = (byId('userLabel').value || '').trim();
+  const customCode = (byId('customCode').value || '').trim();
   const days = parseInt(byId('days').value, 10);
   if (!app) { toast('URL GitHub Pages requise', true); return; }
   if (!label) { toast('Utilisateur requis', true); return; }
+  if (customCode && !/^[A-Za-z0-9_.-]{4,64}$/.test(customCode)) {
+    toast('Code : 4 à 64 caractères (lettres, chiffres, _ . -)', true);
+    return;
+  }
   saveAppUrl();
   const body = { label: label, app: app };
+  if (customCode) body.code = customCode;
   if (!isNaN(days) && days > 0) body.expiresInDays = days;
   try {
     log('Création code : ' + JSON.stringify(body), 'info');
@@ -535,6 +578,7 @@ async function createCode() {
     byId('newCodeValue').textContent = data.code;
     byId('newCodeBox').classList.remove('hidden');
     byId('userLabel').value = '';
+    byId('customCode').value = '';
     log('Code créé : ' + data.code, 'ok');
     toast('Code créé');
     loadCodes();
@@ -945,6 +989,546 @@ function closeCodeModal() {
   const m = byId('codeModal');
   if (m) m.classList.add('hidden');
 }
+function ghToken() {
+  try { return localStorage.getItem(LS_GH_TOKEN) || ''; } catch (e) { return ''; }
+}
+function ghRefreshTokenStatus() {
+  const el = byId('ghTokenStatus');
+  if (!el) return;
+  const has = !!ghToken();
+  el.textContent = has ? 'Token enregistré sur cet appareil' : 'Aucun token enregistré';
+  el.style.color = has ? '#4ade80' : '#94a3b8';
+}
+function ghSaveToken() {
+  const input = byId('ghTokenInput');
+  const t = (input.value || '').trim();
+  if (!t) { toast('Token GitHub vide', true); return; }
+  localStorage.setItem(LS_GH_TOKEN, t);
+  input.value = '';
+  ghRefreshTokenStatus();
+  log('Token GitHub enregistré', 'ok');
+  toast('Token GitHub enregistré');
+  ghLoadRepos();
+}
+function ghClearToken() {
+  localStorage.removeItem(LS_GH_TOKEN);
+  ghRefreshTokenStatus();
+  byId('ghRepo').innerHTML = '<option value="">— charger mes repos —</option>';
+  log('Token GitHub effacé', 'info');
+  toast('Token GitHub effacé');
+}
+async function ghApi(path, opts) {
+  opts = opts || {};
+  const token = ghToken();
+  if (!token) throw new Error('Token GitHub manquant');
+
+  const headers = {
+    'Authorization': 'Bearer ' + token,
+    'Accept': 'application/vnd.github+json'
+  };
+  if (opts.body) headers['Content-Type'] = 'application/json';
+
+  const resp = await fetch('https://api.github.com' + path, {
+    method: opts.method || 'GET',
+    headers: headers,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+    cache: 'no-store'
+  });
+
+  const data = await resp.json().catch(() => ({}));
+
+  if (!resp.ok) {
+    const err = new Error(
+      resp.status === 401
+        ? 'Token GitHub invalide ou expiré'
+        : (data.message || ('HTTP ' + resp.status))
+    );
+    err.status = resp.status;
+    throw err;
+  }
+  return data;
+}
+function ghB64ToText(b64) {
+  const bin = atob(String(b64).replace(/\s/g, ''));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder('utf-8').decode(bytes);
+}
+function ghTextToB64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let bin = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+async function ghLoadRepos() {
+  const sel = byId('ghRepo');
+  if (!ghToken()) { toast('Enregistrez d\'abord votre token GitHub', true); return; }
+
+  sel.innerHTML = '<option value="">Chargement…</option>';
+
+  try {
+    let repos = [];
+    for (let page = 1; page <= 10; page++) {
+      const part = await ghApi('/user/repos?per_page=100&sort=pushed&page=' + page);
+      repos = repos.concat(part);
+      if (part.length < 100) break;
+    }
+
+    repos = repos.filter(r => r.permissions && r.permissions.push && !r.archived);
+
+    sel.innerHTML = '<option value="">— choisir un repo —</option>';
+    repos.forEach(r => {
+      const o = document.createElement('option');
+      o.value = r.full_name;
+      o.dataset.branch = r.default_branch || 'main';
+      o.textContent = r.full_name + (r.private ? ' (privé)' : '');
+      sel.appendChild(o);
+    });
+
+    const last = localStorage.getItem(LS_GH_REPO);
+    if (last && Array.from(sel.options).some(o => o.value === last)) sel.value = last;
+
+    log(repos.length + ' repo(s) GitHub chargé(s)', 'ok');
+  } catch (e) {
+    sel.innerHTML = '<option value="">— erreur de chargement —</option>';
+    log('Erreur GitHub : ' + (e.message || e), 'err');
+    toast('GitHub : ' + (e.message || 'erreur'), true);
+  }
+}
+function pwcGateRuntime(WORKER) {
+  var d = document;
+  var root = d.documentElement;
+  if (d.getElementById('pwc-gate')) return;
+
+  /* Masque l'application tant que le code n'est pas validé */
+  var hide = d.createElement('style');
+  hide.id = 'pwc-gate-hide';
+  hide.textContent = 'body>*:not(#pwc-gate){visibility:hidden!important}';
+  (d.head || root).appendChild(hide);
+  var prevOverflow = root.style.overflow;
+  root.style.overflow = 'hidden';
+
+  /* ---------- Outils couleurs ---------- */
+  function parse(str) {
+    var m = /rgba?\(([^)]+)\)/.exec(str || '');
+    if (!m) return null;
+    var p = m[1].split(/[\s,\/]+/).filter(Boolean).map(parseFloat);
+    if (p.length < 3 || isNaN(p[0]) || isNaN(p[1]) || isNaN(p[2])) return null;
+    return { r: p[0], g: p[1], b: p[2], a: (p.length > 3 && !isNaN(p[3])) ? p[3] : 1 };
+  }
+
+  function css(c, a) {
+    return 'rgba(' + Math.round(c.r) + ',' + Math.round(c.g) + ',' + Math.round(c.b) + ',' + (a === undefined ? c.a : a) + ')';
+  }
+
+  function sat(c) {
+    return Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b);
+  }
+
+  function lum(c) {
+    return (0.299 * c.r + 0.587 * c.g + 0.114 * c.b) / 255;
+  }
+
+  function norm(v) {
+    if (!v) return null;
+    var t = d.createElement('i');
+    t.style.color = v;
+    if (!t.style.color) return null;
+    (d.body || root).appendChild(t);
+    var c = parse(getComputedStyle(t).color);
+    t.parentNode.removeChild(t);
+    return c;
+  }
+
+  /* ---------- Détection des couleurs de l'application ---------- */
+  function rootVars() {
+    var out = [];
+    for (var i = 0; i < d.styleSheets.length; i++) {
+      var rules;
+      try { rules = d.styleSheets[i].cssRules; } catch (e) { continue; }
+      if (!rules) continue;
+      for (var j = 0; j < rules.length; j++) {
+        var r = rules[j];
+        if (!r.style || !/^(:root|html|body)$/.test((r.selectorText || '').trim())) continue;
+        for (var k = 0; k < r.style.length; k++) {
+          var n = r.style[k];
+          if (n.indexOf('--') === 0) out.push([n, r.style.getPropertyValue(n).trim()]);
+        }
+      }
+    }
+    return out;
+  }
+
+  function accentFromVars() {
+    var vars = rootVars();
+    var order = [/accent/, /primary/, /brand/, /main/, /theme/, /highlight/];
+    for (var i = 0; i < order.length; i++) {
+      for (var j = 0; j < vars.length; j++) {
+        if (!order[i].test(vars[j][0].toLowerCase())) continue;
+        var c = norm(vars[j][1]);
+        if (c && c.a > 0.5 && sat(c) > 40) return c;
+      }
+    }
+    return null;
+  }
+
+  function accentFromMeta() {
+    var m = d.querySelector('meta[name="theme-color"]');
+    var c = m ? norm(m.getAttribute('content')) : null;
+    return (c && sat(c) > 40) ? c : null;
+  }
+
+  function accentFromDom() {
+    var els = d.querySelectorAll('button, a, input[type=submit], [class*="btn"], [class*="primary"], [class*="accent"]');
+    for (var i = 0; i < els.length && i < 200; i++) {
+      var cs = getComputedStyle(els[i]);
+      var c = parse(cs.backgroundColor);
+      if (c && c.a > 0.3 && sat(c) > 40) return c;
+      var m = /rgba?\([^)]+\)/.exec(cs.backgroundImage || '');
+      if (m) {
+        c = parse(m[0]);
+        if (c && c.a > 0.3 && sat(c) > 40) return c;
+      }
+    }
+    return null;
+  }
+
+  function readTheme() {
+    var bs = getComputedStyle(d.body);
+    var hs = getComputedStyle(root);
+
+    var fg = parse(bs.color) || { r: 241, g: 245, b: 249, a: 1 };
+    var bg = parse(bs.backgroundColor);
+    if (!bg || bg.a < 0.05) bg = parse(hs.backgroundColor);
+
+    var src = null;
+    if (bs.backgroundImage && bs.backgroundImage !== 'none') src = bs;
+    else if (hs.backgroundImage && hs.backgroundImage !== 'none') src = hs;
+
+    if (!bg || bg.a < 0.05) {
+      bg = lum(fg) > 0.5 ? { r: 8, g: 10, b: 14, a: 1 } : { r: 255, g: 255, b: 255, a: 1 };
+    }
+    bg.a = 1;
+
+    if (Math.abs(lum(fg) - lum(bg)) < 0.3) {
+      fg = lum(bg) < 0.5 ? { r: 241, g: 245, b: 249, a: 1 } : { r: 15, g: 23, b: 42, a: 1 };
+    }
+
+    var acc = accentFromVars() || accentFromMeta() || accentFromDom() || { r: 99, g: 102, b: 241, a: 1 };
+
+    var radius = 12;
+    var ref = d.querySelector('button, input, select');
+    if (ref) {
+      var rr = parseFloat(getComputedStyle(ref).borderTopLeftRadius);
+      if (!isNaN(rr)) radius = Math.max(4, Math.min(24, rr));
+    }
+
+    return { fg: fg, bg: bg, acc: acc, radius: radius, font: bs.fontFamily, src: src };
+  }
+
+  /* ---------- Interface ---------- */
+  var style = d.createElement('style');
+  style.id = 'pwc-gate-css';
+  style.textContent = [
+    '#pwc-gate{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:20px;overflow:auto;visibility:visible!important;font-family:var(--g-font);color:var(--g-fg);background-color:var(--g-bg)}',
+    '#pwc-gate *{box-sizing:border-box;font-family:inherit}',
+    '#pwc-gate .pwc-card{width:100%;max-width:360px;margin:auto;padding:26px 22px;border-radius:calc(var(--g-r) * 1.5);background:var(--g-card);border:1px solid var(--g-line);text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.35)}',
+    '#pwc-gate .pwc-icon{width:52px;height:52px;margin:0 auto 14px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--g-acc-soft);color:var(--g-acc)}',
+    '#pwc-gate .pwc-title{font-size:18px;font-weight:800;margin:0 0 4px;color:var(--g-fg)}',
+    '#pwc-gate .pwc-sub{font-size:12px;margin:0 0 18px;color:var(--g-mute)}',
+    '#pwc-gate .pwc-input{display:block;width:100%;height:46px;padding:0 14px;margin:0 0 10px;border-radius:var(--g-r);border:1px solid var(--g-line);background:var(--g-field);color:var(--g-fg);font-size:16px;outline:none;text-align:center;letter-spacing:.08em}',
+    '#pwc-gate .pwc-input:focus{border-color:var(--g-acc)}',
+    '#pwc-gate .pwc-btn{display:block;width:100%;height:46px;margin:0;border:0;border-radius:var(--g-r);background:var(--g-acc);color:var(--g-acc-fg);font-size:14px;font-weight:800;cursor:pointer}',
+    '#pwc-gate .pwc-btn:disabled{opacity:.55;cursor:wait}',
+    '#pwc-gate .pwc-err{min-height:18px;margin-top:10px;font-size:12px;font-weight:700;color:#f87171}'
+  ].join('');
+
+  var gate = d.createElement('div');
+  gate.id = 'pwc-gate';
+  gate.innerHTML =
+    '<form class="pwc-card" autocomplete="off" novalidate>' +
+      '<div class="pwc-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>' +
+      '<div class="pwc-title"></div>' +
+      '<div class="pwc-sub">Saisissez votre code d\'accès</div>' +
+      '<input class="pwc-input" type="password" placeholder="Code d\'accès" autocomplete="off" autocapitalize="off" spellcheck="false">' +
+      '<button class="pwc-btn" type="submit">Déverrouiller</button>' +
+      '<div class="pwc-err" role="alert"></div>' +
+    '</form>';
+
+  (d.head || root).appendChild(style);
+  d.body.insertBefore(gate, d.body.firstChild);
+
+  var form = gate.querySelector('form');
+  var input = gate.querySelector('.pwc-input');
+  var btn = gate.querySelector('.pwc-btn');
+  var err = gate.querySelector('.pwc-err');
+  gate.querySelector('.pwc-title').textContent = d.title || 'Accès protégé';
+
+  function applyTheme() {
+    if (!gate.parentNode) return;
+    var t = readTheme();
+    var dark = lum(t.bg) < 0.5;
+    var s = gate.style;
+    s.setProperty('--g-bg', css(t.bg, 1));
+    s.setProperty('--g-fg', css(t.fg, 1));
+    s.setProperty('--g-mute', css(t.fg, 0.6));
+    s.setProperty('--g-line', css(t.fg, 0.16));
+    s.setProperty('--g-card', dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.04)');
+    s.setProperty('--g-field', dark ? 'rgba(0,0,0,.3)' : 'rgba(255,255,255,.9)');
+    s.setProperty('--g-acc', css(t.acc, 1));
+    s.setProperty('--g-acc-soft', css(t.acc, 0.16));
+    s.setProperty('--g-acc-fg', lum(t.acc) > 0.6 ? '#0b0b0f' : '#ffffff');
+    s.setProperty('--g-r', t.radius + 'px');
+    s.setProperty('--g-font', t.font || 'system-ui,sans-serif');
+    if (t.src) {
+      s.backgroundImage = t.src.backgroundImage;
+      s.backgroundSize = t.src.backgroundSize;
+      s.backgroundPosition = t.src.backgroundPosition;
+      s.backgroundRepeat = t.src.backgroundRepeat;
+    }
+  }
+
+  function unlock() {
+    if (hide.parentNode) hide.parentNode.removeChild(hide);
+    if (style.parentNode) style.parentNode.removeChild(style);
+    if (gate.parentNode) gate.parentNode.removeChild(gate);
+    root.style.overflow = prevOverflow;
+    try { window.dispatchEvent(new Event('pwc:unlocked')); } catch (e) {}
+  }
+
+  function setBusy(b) {
+    btn.disabled = b;
+    btn.textContent = b ? 'Vérification…' : 'Déverrouiller';
+  }
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var code = (input.value || '').trim();
+    err.textContent = '';
+    if (!code) { err.textContent = 'Saisissez votre code'; return; }
+    setBusy(true);
+
+    fetch(WORKER + '/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: code })
+    })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          return { status: r.status, ok: r.ok, data: j };
+        });
+      })
+      .then(function (res) {
+        if (res.data && res.data.valid === true) { unlock(); return; }
+        if (res.status === 429) throw new Error('Trop de tentatives, réessayez dans une minute');
+        if (!res.ok) throw new Error((res.data && res.data.error) || 'Erreur serveur');
+        input.value = '';
+        err.textContent = 'Code invalide';
+        input.focus();
+      })
+      .catch(function (ex) {
+        err.textContent = (ex instanceof TypeError)
+          ? 'Connexion impossible. Vérifiez votre réseau.'
+          : (ex.message || 'Erreur');
+      })
+      .then(function () {
+        if (gate.parentNode) setBusy(false);
+      });
+  });
+
+  applyTheme();
+  if (d.readyState === 'loading') {
+    d.addEventListener('DOMContentLoaded', function () { applyTheme(); input.focus(); });
+  } else {
+    input.focus();
+  }
+  window.addEventListener('load', applyTheme);
+}
+function ghBuildModule(base, id) {
+  const lt = '<';
+  return lt + '!--PWC-GATE:START id=' + id + '-->\n' +
+    lt + 'script>(' + pwcGateRuntime.toString() + ')(' + JSON.stringify(base) + ');' + lt + '/script>\n' +
+    lt + '!--PWC-GATE:END-->\n';
+}
+function ghInjectModule(html, moduleText) {
+  const START = '<' + '!--PWC-GATE:START';
+  const END = '<' + '!--PWC-GATE:END-->';
+
+  const s = html.indexOf(START);
+  if (s !== -1) {
+    const e = html.indexOf(END, s);
+    if (e === -1) throw new Error('Ancien module corrompu (marqueur de fin introuvable)');
+    let tail = e + END.length;
+    if (html.charAt(tail) === '\n') tail++;
+    html = html.slice(0, s) + html.slice(tail);
+  }
+
+  const headEnd = html.search(/<\/head\s*>/i);
+  const from = headEnd === -1 ? 0 : headEnd;
+  const m = /<body[^>]*>/i.exec(html.slice(from));
+  if (!m) throw new Error('Balise <body> introuvable dans index.html');
+
+  const at = from + m.index + m[0].length;
+  return html.slice(0, at) + '\n' + moduleText + html.slice(at);
+}
+function ghSetProgress(pct, text, isErr) {
+  const wrap = byId('ghProgress');
+  if (wrap) wrap.classList.remove('hidden');
+
+  const bar = byId('ghProgressBar');
+  if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+
+  const t = byId('ghProgressText');
+  if (t && text) {
+    t.textContent = text;
+    t.style.color = isErr ? '#f87171' : '';
+  }
+}
+async function ghWaitForPages(pagesUrl, id) {
+  const marker = 'PWC-GATE:START id=' + id;
+  const started = Date.now();
+  const EXPECTED = 50000;
+  const TIMEOUT = 300000;
+  let ready = false;
+
+  const ticker = setInterval(() => {
+    const elapsed = Date.now() - started;
+    const pct = Math.min(95, (elapsed / EXPECTED) * 95);
+    ghSetProgress(
+      pct,
+      elapsed < EXPECTED
+        ? 'Publication GitHub Pages en cours… ' + Math.max(0, Math.ceil((EXPECTED - elapsed) / 1000)) + ' s'
+        : 'Presque prêt, vérification en cours…'
+    );
+  }, 500);
+
+  try {
+    while (Date.now() - started < TIMEOUT) {
+      await new Promise(r => setTimeout(r, 4000));
+      try {
+        const resp = await fetch(pagesUrl + 'index.html?pwc=' + Date.now(), { cache: 'no-store' });
+        if (resp.ok) {
+          const txt = await resp.text();
+          if (txt.indexOf(marker) !== -1) { ready = true; break; }
+        }
+      } catch (e) {}
+    }
+  } finally {
+    clearInterval(ticker);
+  }
+
+  return ready;
+}
+async function ghInstall() {
+  if (ghState.busy) return;
+
+  const sel = byId('ghRepo');
+  const full = sel.value;
+  if (!full) { toast('Choisissez un repo', true); return; }
+
+  const base = workerUrl();
+  if (!base) { toast('URL du Worker manquante', true); return; }
+
+  if (!confirm('Installer le module de protection dans ' + full + ' ?\nUn commit sera créé sur le repo.')) return;
+
+  const btn = byId('ghInstallBtn');
+  const openBtn = byId('ghOpenBtn');
+  const defBranch = (sel.options[sel.selectedIndex].dataset.branch) || 'main';
+
+  ghState.busy = true;
+  ghState.openUrl = '';
+  btn.disabled = true;
+  openBtn.classList.add('hidden');
+  localStorage.setItem(LS_GH_REPO, full);
+
+  try {
+    ghSetProgress(0, 'Lecture du repo…');
+    log('GitHub : lecture de ' + full, 'info');
+
+    let pages;
+    try {
+      pages = await ghApi('/repos/' + full + '/pages');
+    } catch (e) {
+      if (e.status === 404) throw new Error('GitHub Pages n\'est pas activé sur ce repo');
+      throw e;
+    }
+
+    const branch = (pages.source && pages.source.branch) || defBranch;
+    const dir = (pages.source && pages.source.path && pages.source.path !== '/')
+      ? pages.source.path.replace(/^\/+|\/+$/g, '') + '/'
+      : '';
+    const filePath = dir + 'index.html';
+
+    const parts = full.split('/');
+    let pagesUrl = pages.html_url || ('https://' + parts[0] + '.github.io/' + parts[1] + '/');
+    if (pagesUrl.slice(-1) !== '/') pagesUrl += '/';
+
+    const apiPath = '/repos/' + full + '/contents/' + filePath.split('/').map(encodeURIComponent).join('/');
+
+    let file;
+    try {
+      file = await ghApi(apiPath + '?ref=' + encodeURIComponent(branch));
+    } catch (e) {
+      if (e.status === 404) throw new Error('index.html introuvable (' + filePath + ' sur ' + branch + ')');
+      throw e;
+    }
+
+    let source = (file.content && file.encoding === 'base64') ? file.content : '';
+    if (!source) {
+      const blob = await ghApi('/repos/' + full + '/git/blobs/' + file.sha);
+      source = blob.content;
+    }
+    const original = ghB64ToText(source);
+    const reinstall = original.indexOf('<' + '!--PWC-GATE:START') !== -1;
+
+    ghSetProgress(0, 'Ajout du module…');
+    const id = Date.now().toString(36);
+    const updated = ghInjectModule(original, ghBuildModule(base, id));
+
+    ghSetProgress(0, 'Envoi du commit…');
+    await ghApi(apiPath, {
+      method: 'PUT',
+      body: {
+        message: (reinstall ? 'Mise à jour' : 'Ajout') + ' du module de protection par code (PWC)',
+        content: ghTextToB64(updated),
+        sha: file.sha,
+        branch: branch
+      }
+    });
+    log('GitHub : commit envoyé sur ' + full + ' (' + branch + ')', 'ok');
+
+    const ready = await ghWaitForPages(pagesUrl, id);
+
+    if (ready) {
+      ghSetProgress(100, 'GitHub Pages est à jour');
+      log('GitHub Pages à jour : ' + pagesUrl, 'ok');
+      toast('Application protégée et publiée');
+      openBtn.textContent = 'Ouvrir l\'application';
+    } else {
+      ghSetProgress(95, 'Publication non confirmée après 5 min (peut être encore en cours)', true);
+      log('GitHub Pages : mise à jour non confirmée après 5 min', 'warn');
+      toast('Publication non confirmée', true);
+      openBtn.textContent = 'Ouvrir quand même';
+    }
+
+    ghState.openUrl = pagesUrl;
+    openBtn.classList.remove('hidden');
+
+  } catch (e) {
+    ghSetProgress(0, 'Échec : ' + (e.message || e), true);
+    log('Erreur installation : ' + (e.message || e), 'err');
+    toast('Installation impossible : ' + (e.message || ''), true);
+  } finally {
+    ghState.busy = false;
+    btn.disabled = false;
+  }
+}
+function ghOpenApp() {
+  if (ghState.openUrl) window.open(ghState.openUrl, '_blank', 'noopener');
+}
 
 window.addEventListener('error', (e) => {
   log(
@@ -978,6 +1562,9 @@ window.addEventListener('unhandledrejection', (e) => {
       if (e.target === modal) closeCodeModal();
     });
   }
+})();
+(function ghInit() {
+  ghRefreshTokenStatus();
 })();
 </script>
 <script>
