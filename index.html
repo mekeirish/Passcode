@@ -230,6 +230,9 @@
     <div class="sub">Console d'administration multi-PWA</div>
   </div>
   <div style="display:flex;align-items:center;gap:8px;flex:0 0 auto;">
+    <button id="workerBtn" class="small" onclick="openWorkerModal()" title="Code du Worker" style="width:36px;padding:0;display:flex;align-items:center;justify-content:center;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+    </button>
     <button id="ghKeyBtn" class="small hidden" onclick="ghOpenKeyModal()" title="Token GitHub" style="width:36px;padding:0;display:flex;align-items:center;justify-content:center;">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.85 12.15 19 4"/><path d="M18 5l2 2"/><path d="M15 8l2 2"/></svg>
     </button>
@@ -1227,6 +1230,346 @@ function ghOpenKeyModal() {
   actions.appendChild(closeBtn);
 
   byId('codeModal').classList.remove('hidden');
+}
+const WORKER_CODE = `const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Max-Age': '86400'
+};
+
+function json(data, status) {
+  status = status || 200;
+  return new Response(JSON.stringify(data), {
+    status: status,
+    headers: { 'Content-Type': 'application/json', ...CORS }
+  });
+}
+
+function noContent() {
+  return new Response(null, { status: 204, headers: CORS });
+}
+
+async function sha256Bytes(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return new Uint8Array(buf);
+}
+
+async function sha256Hex(str) {
+  const bytes = await sha256Bytes(str);
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
+  return hex;
+}
+
+async function timingSafeEqual(a, b) {
+  const da = await sha256Bytes(a);
+  const db = await sha256Bytes(b);
+  if (da.length !== db.length) return false;
+  let diff = 0;
+  for (let i = 0; i < da.length; i++) diff |= da[i] ^ db[i];
+  return diff === 0;
+}
+
+function generateCode(len) {
+  len = len || 12;
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.getRandomValues(new Uint8Array(len));
+  let out = '';
+  for (let i = 0; i < len; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
+const schemaReady = new WeakSet();
+async function ensureSchema(env) {
+  if (schemaReady.has(env)) return;
+  await env.DB.batch([
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS access_codes (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, label TEXT, app TEXT, created_at INTEGER NOT NULL, expires_at INTEGER, revoked_at INTEGER)'),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_access_codes_hash ON access_codes (code_hash)'),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_access_codes_app ON access_codes (app)')
+  ]);
+  schemaReady.add(env);
+}
+
+async function checkRateLimit(env, ip, bucket) {
+  if (!env.AUTH_RATE_LIMIT) return true;
+  const minute = Math.floor(Date.now() / 60000);
+  const key = 'rl:' + bucket + ':' + ip + ':' + minute;
+  try {
+    const cur = await env.AUTH_RATE_LIMIT.get(key);
+    const n = cur ? parseInt(cur, 10) : 0;
+    if (n >= 20) return false;
+    await env.AUTH_RATE_LIMIT.put(key, String(n + 1), { expirationTtl: 120 });
+    return true;
+  } catch (e) {
+    return true;
+  }
+}
+
+async function checkAdmin(request, env) {
+  if (!env.ADMIN_TOKEN) return { ok: false, response: json({ error: 'Administration non configurée' }, 503) };
+  const auth = request.headers.get('Authorization') || '';
+  if (auth.toLowerCase().indexOf('bearer ') !== 0) return { ok: false, response: json({ error: 'Authentification requise' }, 401) };
+  const token = auth.slice(7).trim();
+  if (!token) return { ok: false, response: json({ error: 'Token administrateur manquant' }, 401) };
+  const ok = await timingSafeEqual(token, env.ADMIN_TOKEN);
+  if (!ok) return { ok: false, response: json({ error: 'Token administrateur invalide' }, 403) };
+  return { ok: true };
+}
+
+async function handleVerify(request, env) {
+  let body;
+  try {
+    const text = await request.text();
+    if (text.length > 2048) return json({ error: 'Payload trop volumineux' }, 413);
+    body = JSON.parse(text);
+  } catch (e) {
+    return json({ error: 'JSON invalide' }, 400);
+  }
+  const raw = body && (body.code || body.password);
+  if (!raw || typeof raw !== 'string' || raw.length === 0 || raw.length > 256) {
+    return json({ error: 'Code manquant ou invalide' }, 400);
+  }
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const allowed = await checkRateLimit(env, ip, 'verify');
+  if (!allowed) return json({ error: 'Trop de tentatives' }, 429);
+  if (env.GATE_PASSWORD) {
+    const legacyOk = await timingSafeEqual(raw, env.GATE_PASSWORD);
+    if (legacyOk) return json({ valid: true });
+  }
+  if (!env.DB) return json({ error: 'Base de données indisponible' }, 503);
+  await ensureSchema(env);
+  const hash = await sha256Hex(raw);
+  const row = await env.DB.prepare('SELECT id, expires_at, revoked_at FROM access_codes WHERE code_hash = ?').bind(hash).first();
+  if (!row) return json({ valid: false });
+  if (row.revoked_at) return json({ valid: false });
+  if (row.expires_at && row.expires_at <= Date.now()) return json({ valid: false });
+  return json({ valid: true });
+}
+
+async function handleCreateCode(request, env) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const allowed = await checkRateLimit(env, ip, 'admin');
+  if (!allowed) return json({ error: 'Trop de tentatives' }, 429);
+  const auth = await checkAdmin(request, env);
+  if (!auth.ok) return auth.response;
+  let body;
+  try {
+    const text = await request.text();
+    if (text.length > 4096) return json({ error: 'Payload trop volumineux' }, 413);
+    body = text ? JSON.parse(text) : {};
+  } catch (e) {
+    return json({ error: 'JSON invalide' }, 400);
+  }
+  const label = (body && typeof body.label === 'string') ? body.label.slice(0, 100) : null;
+  const app = (body && typeof body.app === 'string') ? body.app.slice(0, 200) : null;
+  let expiresInDays = null;
+  if (body && body.expiresInDays !== undefined && body.expiresInDays !== null) {
+    const v = Number(body.expiresInDays);
+    if (!isFinite(v) || v < 0 || v > 3650) return json({ error: 'expiresInDays invalide' }, 400);
+    expiresInDays = v;
+  }
+  if (!env.DB) return json({ error: 'Base de données indisponible' }, 503);
+  await ensureSchema(env);
+  let code;
+  if (body && typeof body.code === 'string' && body.code.trim().length > 0) {
+    const custom = body.code.trim();
+    if (custom.length < 4 || custom.length > 64) return json({ error: 'Le code doit faire entre 4 et 64 caractères' }, 400);
+    if (!/^[A-Za-z0-9_.-]+$/.test(custom)) return json({ error: 'Caractères autorisés : lettres, chiffres, _ . -' }, 400);
+    code = custom;
+  } else {
+    code = generateCode(12);
+  }
+  const hash = await sha256Hex(code);
+  const existing = await env.DB.prepare('SELECT id FROM access_codes WHERE code_hash = ?').bind(hash).first();
+  if (existing) return json({ error: 'Ce code existe déjà' }, 409);
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const expiresAt = (expiresInDays !== null && expiresInDays > 0) ? now + expiresInDays * 86400000 : null;
+  try {
+    await env.DB.prepare('INSERT INTO access_codes (id, code_hash, label, app, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, NULL)').bind(id, hash, label, app, now, expiresAt).run();
+  } catch (e) {
+    return json({ error: 'Création impossible' }, 500);
+  }
+  return json({ id: id, code: code, label: label, app: app, expires_at: expiresAt, created_at: now }, 201);
+}
+
+async function handleListCodes(request, env, url) {
+  const auth = await checkAdmin(request, env);
+  if (!auth.ok) return auth.response;
+  if (!env.DB) return json({ error: 'Binding D1 "DB" absent' }, 503);
+  try {
+    await ensureSchema(env);
+    const appFilter = url.searchParams.get('app');
+    let result;
+    if (appFilter) {
+      result = await env.DB.prepare('SELECT id, label, app, created_at, expires_at, revoked_at FROM access_codes WHERE app = ? ORDER BY created_at DESC LIMIT 200').bind(appFilter).all();
+    } else {
+      result = await env.DB.prepare('SELECT id, label, app, created_at, expires_at, revoked_at FROM access_codes ORDER BY created_at DESC LIMIT 200').all();
+    }
+    const now = Date.now();
+    const rows = (result.results || []).map(function (r) {
+      let status = 'active';
+      if (r.revoked_at) status = 'revoked';
+      else if (r.expires_at && r.expires_at <= now) status = 'expired';
+      return { id: r.id, label: r.label, app: r.app, created_at: r.created_at, expires_at: r.expires_at, revoked_at: r.revoked_at, status: status };
+    });
+    return json({ codes: rows });
+  } catch (e) {
+    return json({ error: 'DB: ' + (e && e.message ? e.message : String(e)) }, 500);
+  }
+}
+
+async function handleRevokeCode(request, env, id) {
+  const auth = await checkAdmin(request, env);
+  if (!auth.ok) return auth.response;
+  if (!env.DB) return json({ error: 'Base de données indisponible' }, 503);
+  await ensureSchema(env);
+  const now = Date.now();
+  const res = await env.DB.prepare('UPDATE access_codes SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').bind(now, id).run();
+  if (!res.meta || res.meta.changes === 0) return json({ error: 'Code introuvable ou déjà révoqué' }, 404);
+  return json({ revoked: true, id: id, revoked_at: now });
+}
+
+async function handleUpdateCode(request, env, id) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const allowed = await checkRateLimit(env, ip, 'admin');
+  if (!allowed) return json({ error: 'Trop de tentatives' }, 429);
+  const auth = await checkAdmin(request, env);
+  if (!auth.ok) return auth.response;
+  let body;
+  try {
+    const text = await request.text();
+    if (text.length > 4096) return json({ error: 'Payload trop volumineux' }, 413);
+    body = text ? JSON.parse(text) : {};
+  } catch (e) {
+    return json({ error: 'JSON invalide' }, 400);
+  }
+  if (!env.DB) return json({ error: 'Base de données indisponible' }, 503);
+  await ensureSchema(env);
+  const sets = [];
+  const vals = [];
+  if (body && body.label !== undefined) {
+    if (typeof body.label !== 'string' || !body.label.trim()) return json({ error: 'Nom invalide' }, 400);
+    sets.push('label = ?');
+    vals.push(body.label.trim().slice(0, 100));
+  }
+  if (body && body.app !== undefined) {
+    if (typeof body.app !== 'string' || !body.app.trim()) return json({ error: 'URL invalide' }, 400);
+    sets.push('app = ?');
+    vals.push(body.app.trim().slice(0, 200));
+  }
+  if (body && body.expiresInDays !== undefined) {
+    const v = Number(body.expiresInDays);
+    if (!isFinite(v) || v < 0 || v > 3650) return json({ error: 'expiresInDays invalide' }, 400);
+    sets.push('expires_at = ?');
+    vals.push(v > 0 ? Date.now() + v * 86400000 : null);
+  }
+  if (!sets.length) return json({ error: 'Rien à modifier' }, 400);
+  vals.push(id);
+  const res = await env.DB.prepare('UPDATE access_codes SET ' + sets.join(', ') + ' WHERE id = ? AND revoked_at IS NULL').bind(...vals).run();
+  if (!res.meta || res.meta.changes === 0) return json({ error: 'Code introuvable ou révoqué' }, 404);
+  return json({ updated: true, id: id });
+}
+
+async function handleDeleteCode(request, env, id) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const allowed = await checkRateLimit(env, ip, 'admin');
+  if (!allowed) return json({ error: 'Trop de tentatives' }, 429);
+  const auth = await checkAdmin(request, env);
+  if (!auth.ok) return auth.response;
+  if (!env.DB) return json({ error: 'Base de données indisponible' }, 503);
+  await ensureSchema(env);
+  const res = await env.DB.prepare('DELETE FROM access_codes WHERE id = ?').bind(id).run();
+  if (!res.meta || res.meta.changes === 0) return json({ error: 'Code introuvable' }, 404);
+  return json({ deleted: true, id: id });
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    try {
+      const method = request.method;
+      const url = new URL(request.url);
+      const path = url.pathname;
+      if (method === 'OPTIONS') return noContent();
+      if (path === '/health' && method === 'GET') return json({ status: 'ok' });
+      if (path === '/verify') {
+        if (method !== 'POST') return json({ error: 'Méthode non autorisée' }, 405);
+        return await handleVerify(request, env);
+      }
+      if (path === '/admin/codes') {
+        if (method === 'POST') return await handleCreateCode(request, env);
+        if (method === 'GET') return await handleListCodes(request, env, url);
+        return json({ error: 'Méthode non autorisée' }, 405);
+      }
+      const parts = path.split('/');
+      if (parts.length === 4 && parts[1] === 'admin' && parts[2] === 'codes' && parts[3]) {
+        if (method === 'PUT') return await handleUpdateCode(request, env, parts[3]);
+        if (method === 'DELETE') return await handleDeleteCode(request, env, parts[3]);
+        return json({ error: 'Méthode non autorisée' }, 405);
+      }
+      if (parts.length === 5 && parts[1] === 'admin' && parts[2] === 'codes' && parts[4] === 'revoke' && parts[3]) {
+        if (method !== 'POST') return json({ error: 'Méthode non autorisée' }, 405);
+        return await handleRevokeCode(request, env, parts[3]);
+      }
+      return json({ error: 'Route inconnue' }, 404);
+    } catch (err) {
+      return json({ error: 'Erreur serveur: ' + (err && err.message ? err.message : String(err)) }, 500);
+    }
+  }
+};
+`;
+function openWorkerModal() {
+  byId('modalTitle').textContent = 'Worker Cloudflare';
+
+  const row = function (name, tag, desc) {
+    return '<div style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05);">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px;">' +
+        '<span style="font-family:ui-monospace,monospace;font-size:12px;font-weight:800;">' + name + '</span>' +
+        '<span class="badge ' + (tag === 'Obligatoire' ? 'active' : 'expired') + '">' + tag + '</span>' +
+      '</div>' +
+      '<div class="item-meta" style="font-size:11px;line-height:1.45;">' + desc + '</div>' +
+    '</div>';
+  };
+
+  byId('modalBody').innerHTML =
+    '<div class="item-meta" style="font-size:11px;line-height:1.5;margin-bottom:6px;">' +
+      'Créez un Worker dans Cloudflare, collez-y ce code puis déployez. ' +
+      'Ajoutez ensuite ces éléments dans Settings → Bindings et Variables and Secrets.' +
+    '</div>' +
+    row('DB', 'Obligatoire', 'Binding D1 : base de données qui stocke les codes. Créez une base D1 et liez-la avec le nom de variable DB. Les tables sont créées automatiquement.') +
+    row('ADMIN_TOKEN', 'Obligatoire', 'Secret : le mot de passe pour se connecter à Passcode. Utilisez 24 caractères ou plus.') +
+    row('GATE_PASSWORD', 'Optionnel', 'Secret : code universel toujours accepté, indépendant de la base. Pratique pour dépanner ; à ne pas donner aux utilisateurs.') +
+    row('AUTH_RATE_LIMIT', 'Optionnel', 'Binding KV : limite à 20 tentatives par minute et par IP contre le devinage de codes. Sans lui, aucune limite.') +
+    '<div class="item-meta" style="font-size:11px;line-height:1.5;margin-top:10px;">' +
+      'Test : ouvrez l’adresse du Worker suivie de /health, vous devez voir {"status":"ok"}.' +
+    '</div>';
+
+  const actions = byId('modalActions');
+  actions.innerHTML = '';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'primary';
+  copyBtn.style.flex = '1';
+  copyBtn.textContent = 'Copier le code du Worker';
+  copyBtn.onclick = copyWorkerCode;
+  actions.appendChild(copyBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'small';
+  closeBtn.textContent = 'Fermer';
+  closeBtn.onclick = closeCodeModal;
+  actions.appendChild(closeBtn);
+
+  byId('codeModal').classList.remove('hidden');
+}
+async function copyWorkerCode() {
+  try {
+    await navigator.clipboard.writeText(WORKER_CODE);
+    toast('Code du Worker copié');
+  } catch (e) {
+    toast('Copie impossible', true);
+  }
 }
 async function ghApi(path, opts) {
   opts = opts || {};
