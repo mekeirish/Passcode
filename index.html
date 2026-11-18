@@ -226,12 +226,17 @@
 
 <div class="glass" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
   <div>
-    <h1>PWC — Password Creator</h1>
+    <h1>Passcode</h1>
     <div class="sub">Console d'administration multi-PWA</div>
   </div>
-  <button id="disconnectBtn" class="small hidden" onclick="disconnect()" style="flex:0 0 auto;">
-    Déconnexion
-  </button>
+  <div style="display:flex;align-items:center;gap:8px;flex:0 0 auto;">
+    <button id="ghKeyBtn" class="small hidden" onclick="ghOpenKeyModal()" title="Token GitHub" style="width:36px;padding:0;display:flex;align-items:center;justify-content:center;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.85 12.15 19 4"/><path d="M18 5l2 2"/><path d="M15 8l2 2"/></svg>
+    </button>
+    <button id="disconnectBtn" class="small hidden" onclick="disconnect()" style="flex:0 0 auto;">
+      Déconnexion
+    </button>
+  </div>
 </div>
 
 <div id="authCard" class="glass">
@@ -239,7 +244,7 @@
   <input id="workerUrl" type="url" placeholder="https://mon-worker.xxx.workers.dev" autocomplete="off" spellcheck="false">
 
   <label style="margin-top:10px;">Token administrateur</label>
-  <input id="adminToken" type="password" placeholder="ADMIN_TOKEN (jamais stocké)" autocomplete="off" spellcheck="false">
+<input id="adminToken" type="password" placeholder="ADMIN_TOKEN (gardé le temps de la session)" autocomplete="off" spellcheck="false">
 
   <div class="row two" style="margin-top:10px;">
     <button class="primary" onclick="connect()">Se connecter</button>
@@ -250,7 +255,16 @@
 
   <div id="panel" class="glass hidden">
     <label>URL GitHub Pages de l'application cible</label>
-    <input id="appUrl" type="url" placeholder="https://user.github.io/mon-app/" autocomplete="off" spellcheck="false">
+<select id="appUrl" style="color-scheme:dark;" onchange="ghUpdateRemoveBtn()">
+  <option value="">— enregistrez votre token GitHub —</option>
+</select>
+<div id="ghTokenBox" style="margin-top:10px;">
+  <label>Token GitHub</label>
+  <div style="display:flex;gap:8px;">
+    <input id="ghTokenInput" type="password" placeholder="github_pat_… ou ghp_…" autocomplete="off" spellcheck="false" style="min-width:0;">
+    <button class="small" style="height:42px;flex:0 0 auto;" onclick="ghSaveToken()">Enregistrer</button>
+  </div>
+</div>
 <label style="margin-top:10px;">Code d'accès (vide = généré automatiquement)</label>
 <input id="customCode" type="text" maxlength="64" placeholder="ex: jean2026" autocomplete="off" spellcheck="false">
     <div class="row three" style="margin-top:10px;">
@@ -270,33 +284,15 @@
     <div id="newCodeBox" class="code-box hidden">
       <div class="code-label">Code créé — copiez-le maintenant</div>
       <div id="newCodeValue" class="code-value"></div>
-      <div class="row two" style="margin-top:8px; margin-bottom:0;">
-        <button class="small" onclick="copyNewCode()">Copier le code</button>
-        <button class="small" onclick="sendToAI()">Send IA</button>
-      </div>
+<div class="row two" style="margin-top:8px; margin-bottom:0;">
+  <button class="small" onclick="copyNewCode()">Copier le code</button>
+  <button class="small" onclick="sendToAI()">Send IA</button>
+</div>
+<button class="small" style="width:100%;margin-top:8px;" onclick="shareNewCode()">Partager (WhatsApp, SMS…)</button>
     </div>
-<div id="ghPanel" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06);">
-  <div class="sub" style="margin-bottom:8px;">Protéger une application (GitHub)</div>
-
-  <label>Token GitHub</label>
-  <div style="display:flex;gap:8px;">
-    <input id="ghTokenInput" type="password" placeholder="github_pat_… ou ghp_…" autocomplete="off" spellcheck="false" style="min-width:0;">
-    <button class="small" style="height:42px;flex:0 0 auto;" onclick="ghSaveToken()">Enregistrer</button>
-  </div>
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;">
-    <div id="ghTokenStatus" class="item-meta"></div>
-    <button class="small" onclick="ghClearToken()">Effacer</button>
-  </div>
-
-  <label style="margin-top:10px;">Application (repo)</label>
-  <div style="display:flex;gap:8px;">
-    <select id="ghRepo" style="min-width:0;color-scheme:dark;">
-      <option value="">— charger mes repos —</option>
-    </select>
-    <button class="small" style="height:42px;flex:0 0 auto;" onclick="ghLoadRepos()">Charger</button>
-  </div>
-
-  <button id="ghInstallBtn" class="primary" style="width:100%;margin-top:10px;" onclick="ghInstall()">Installer le module de protection</button>
+<div id="ghPanel" class="hidden" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06);">
+  <button id="ghInstallBtn" class="primary" style="width:100%;" onclick="ghInstall()">Installer le module dans l'application choisie</button>
+  <button id="ghRemoveBtn" class="hidden" style="width:100%;margin-top:8px;color:#f87171;border-color:rgba(239,68,68,.25);" onclick="ghRemoveModule()">Retirer le module de protection</button>
 
   <div id="ghProgress" class="hidden" style="margin-top:10px;">
     <div id="ghProgressText" class="item-meta" style="margin-bottom:6px;"></div>
@@ -317,6 +313,7 @@
     <label>Filtrer par application (URL GitHub Pages)</label>
     <input id="filterApp" type="url" placeholder="laisser vide = tous" autocomplete="off" spellcheck="false">
 <div id="appFilters" class="app-filters"></div>
+<input id="searchCode" type="search" placeholder="Rechercher un utilisateur…" oninput="renderCodes()" autocomplete="off" spellcheck="false" style="margin-top:8px;">
     <div id="list" class="list"></div>
   </div>
 
@@ -360,8 +357,77 @@ let codesCache = [];
 const LS_GH_TOKEN = 'pwc_gh_token';
 const LS_GH_REPO = 'pwc_gh_repo';
 const ghState = { busy: false, openUrl: '' };
+const SS_ADMIN = 'pwc_admin_session';
+let lastApp = '';
 
 const byId = id => document.getElementById(id);
+function confirmDialog(message, okLabel, danger) {
+  return new Promise(function (resolve) {
+    const old = byId('confirmModal');
+    if (old) old.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'confirmModal';
+    overlay.className = 'modal';
+    overlay.style.zIndex = '10001';
+    overlay.style.alignItems = 'center';
+    overlay.style.padding = '16px';
+
+    const box = document.createElement('div');
+    box.className = 'modal-content glass';
+    box.style.borderRadius = '18px';
+    box.style.maxWidth = '380px';
+
+    const text = document.createElement('div');
+    text.style.cssText = 'font-size:13px;line-height:1.5;white-space:pre-line;margin-bottom:14px;';
+    text.textContent = message;
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:8px;';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.style.flex = '1';
+    cancelBtn.textContent = 'Annuler';
+
+    const okBtn = document.createElement('button');
+    okBtn.type = 'button';
+    okBtn.style.flex = '1';
+    okBtn.textContent = okLabel || 'Confirmer';
+    if (danger) {
+      okBtn.style.background = 'rgba(239,68,68,.15)';
+      okBtn.style.borderColor = 'rgba(239,68,68,.35)';
+      okBtn.style.color = '#fca5a5';
+    } else {
+      okBtn.className = 'primary';
+    }
+
+    function onKey(e) {
+      if (e.key === 'Escape') finish(false);
+    }
+
+    function finish(result) {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(result);
+    }
+
+    cancelBtn.onclick = () => finish(false);
+    okBtn.onclick = () => finish(true);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) finish(false);
+    });
+    document.addEventListener('keydown', onKey);
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(okBtn);
+    box.appendChild(text);
+    box.appendChild(actions);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    okBtn.focus();
+  });
+}
 
 function toast(msg, isErr) {
   const old = document.querySelector('.toast'); if (old) old.remove();
@@ -483,6 +549,8 @@ async function connect() {
     );
 
     if (resp.status === 401 || resp.status === 403) {
+      try { sessionStorage.removeItem(SS_ADMIN); } catch (x) {}
+      byId('adminToken').value = '';
       err.textContent = 'Token invalide';
       err.classList.remove('hidden');
       log('Échec : token refusé par le Worker', 'err');
@@ -500,6 +568,7 @@ async function connect() {
     log('JSON reçu : ' + JSON.stringify(data).slice(0, 200), 'ok');
 
     adminToken = token;
+    try { sessionStorage.setItem(SS_ADMIN, token); } catch (x) {}
 
     byId('adminToken').value = '';
 
@@ -525,6 +594,7 @@ async function connect() {
 
 function disconnect() {
   adminToken = '';
+  try { sessionStorage.removeItem(SS_ADMIN); } catch (x) {}
 
   byId('panel').classList.add('hidden');
   byId('listPanel').classList.add('hidden');
@@ -575,12 +645,18 @@ async function createCode() {
     }
     const data = await resp.json();
     lastCode = data.code;
+    lastApp = app;
     byId('newCodeValue').textContent = data.code;
     byId('newCodeBox').classList.remove('hidden');
     byId('userLabel').value = '';
     byId('customCode').value = '';
     log('Code créé : ' + data.code, 'ok');
-    toast('Code créé');
+    try {
+      await navigator.clipboard.writeText(data.code);
+      toast('Code créé et copié');
+    } catch (x) {
+      toast('Code créé');
+    }
     loadCodes();
   } catch (e) {
     log('Erreur création : ' + (e.message || e), 'err');
@@ -594,6 +670,28 @@ async function copyNewCode() {
     toast('Code copié');
   } catch (e) {
     toast('Copie impossible', true);
+  }
+}
+async function shareNewCode() {
+  if (!lastCode) { toast('Aucun code à partager', true); return; }
+
+  const text = 'Voici ton code d\'accès : ' + lastCode +
+    (lastApp ? '\nApplication : ' + lastApp : '');
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: 'Code d\'accès', text: text });
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+    }
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Message copié');
+  } catch (e) {
+    toast('Partage impossible', true);
   }
 }
 
@@ -702,6 +800,7 @@ function renderAppFilters(codes) {
     chip.appendChild(label);
     chip.onclick = () => {
       byId('filterApp').value = app;
+      selectApp(app);
       renderCodes();
     };
     el.appendChild(chip);
@@ -712,10 +811,15 @@ function renderCodes() {
   if (!list) return;
 
   const filter = (byId('filterApp').value || '').trim();
+  const q = ((byId('searchCode') || {}).value || '').trim().toLowerCase();
   let codes = codesCache || [];
 
   if (filter) {
     codes = codes.filter(c => (c.app || '').includes(filter));
+  }
+
+  if (q) {
+    codes = codes.filter(c => (c.label || '').toLowerCase().includes(q));
   }
 
   list.innerHTML = '';
@@ -736,6 +840,7 @@ function renderCodes() {
       expiresAt &&
       expiresAt > Date.now() &&
       expiresAt - Date.now() < 30 * 24 * 60 * 60 * 1000;
+    const canExtend = isExpiring || c.status === 'expired';
 
     const exp = expiresAt
       ? new Date(expiresAt).toLocaleDateString('fr-FR')
@@ -751,9 +856,18 @@ function renderCodes() {
       '<span class="badge ' + escapeHtml(c.status || '') + '">' +
         escapeHtml(c.status || '—') +
       '</span>' +
+      (canExtend ? '<button class="small ext" title="Prolonger de 30 jours" style="flex:0 0 auto;">+30 j</button>' : '') +
       '<button class="del" title="Révoquer le code">✕</button>';
 
     item.onclick = () => openCodeModal(c);
+
+    const ext = item.querySelector('.ext');
+    if (ext) {
+      ext.onclick = (e) => {
+        e.stopPropagation();
+        extendCode(c, ext);
+      };
+    }
 
     const btn = item.querySelector('.del');
     if (btn) {
@@ -790,7 +904,7 @@ async function loadCodes() {
 
 async function revokeCode(id) {
   if (!id) return;
-  if (!confirm('Révoquer ce code ?')) return;
+  if (!(await confirmDialog('Révoquer ce code ?', 'Révoquer', true))) return;
 
   const base = workerUrl().replace(/\/+$/, '');
 
@@ -827,9 +941,57 @@ async function revokeCode(id) {
     toast('Révocation impossible : ' + (e.message || e), true);
   }
 }
+async function extendCode(c, btn) {
+  if (!c || !c.id) return;
+
+  const base = workerUrl().replace(/\/+$/, '');
+  const exp = c.expires_at ? Number(c.expires_at) : 0;
+  const remaining = exp > Date.now() ? Math.ceil((exp - Date.now()) / 86400000) : 0;
+  const days = Math.min(3650, remaining + 30);
+
+  if (btn) btn.disabled = true;
+
+  try {
+    const resp = await fetch(
+      base + '/admin/codes/' + encodeURIComponent(c.id),
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + adminToken
+        },
+        body: JSON.stringify({ expiresInDays: days })
+      }
+    );
+
+    const data = await resp.json().catch(() => ({}));
+    log('Prolongation → ' + resp.status, resp.ok ? 'ok' : 'warn');
+
+    if (!resp.ok) {
+      throw new Error(data.error || ('HTTP ' + resp.status));
+    }
+
+    toast('Prolongé de 30 jours');
+    await loadCodes();
+  } catch (e) {
+    log('Erreur prolongation : ' + (e.message || e), 'err');
+    toast('Prolongation impossible : ' + (e.message || ''), true);
+    if (btn) btn.disabled = false;
+  }
+}
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function selectApp(url) {
+  const sel = byId('appUrl');
+  if (!sel || sel.tagName !== 'SELECT') return;
+  const norm = u => String(u || '').trim().toLowerCase().replace(/\/+$/, '');
+  const opt = Array.from(sel.options).find(o => o.value && norm(o.value) === norm(url));
+  if (opt) {
+    sel.value = opt.value;
+    ghUpdateRemoveBtn();
+  }
 }
 function openCodeModal(c) {
   if (!c) return;
@@ -890,9 +1052,12 @@ function openCodeModal(c) {
 async function deleteCode(id) {
   if (!id) return;
 
-  if (!confirm('Supprimer définitivement cet utilisateur et son code d’accès ? Cette action est irréversible.')) {
-    return;
-  }
+  const confirmed = await confirmDialog(
+    'Supprimer définitivement cet utilisateur et son code d’accès ? Cette action est irréversible.',
+    'Supprimer',
+    true
+  );
+  if (!confirmed) return;
 
   try {
     const base = workerUrl().replace(/\/+$/, '');
@@ -993,19 +1158,23 @@ function ghToken() {
   try { return localStorage.getItem(LS_GH_TOKEN) || ''; } catch (e) { return ''; }
 }
 function ghRefreshTokenStatus() {
-  const el = byId('ghTokenStatus');
-  if (!el) return;
   const has = !!ghToken();
-  el.textContent = has ? 'Token enregistré sur cet appareil' : 'Aucun token enregistré';
-  el.style.color = has ? '#4ade80' : '#94a3b8';
+  const toggle = (id, show) => {
+    const el = byId(id);
+    if (el) el.classList.toggle('hidden', !show);
+  };
+  toggle('ghTokenBox', !has);
+  toggle('ghPanel', has);
+  toggle('ghKeyBtn', has);
 }
-function ghSaveToken() {
-  const input = byId('ghTokenInput');
-  const t = (input.value || '').trim();
+function ghSaveToken(inputId) {
+  const input = byId(inputId || 'ghTokenInput');
+  const t = ((input && input.value) || '').trim();
   if (!t) { toast('Token GitHub vide', true); return; }
   localStorage.setItem(LS_GH_TOKEN, t);
   input.value = '';
   ghRefreshTokenStatus();
+  closeCodeModal();
   log('Token GitHub enregistré', 'ok');
   toast('Token GitHub enregistré');
   ghLoadRepos();
@@ -1013,9 +1182,51 @@ function ghSaveToken() {
 function ghClearToken() {
   localStorage.removeItem(LS_GH_TOKEN);
   ghRefreshTokenStatus();
-  byId('ghRepo').innerHTML = '<option value="">— charger mes repos —</option>';
+  const sel = byId('appUrl');
+  if (sel) sel.innerHTML = '<option value="">— enregistrez votre token GitHub —</option>';
   log('Token GitHub effacé', 'info');
   toast('Token GitHub effacé');
+}
+function ghOpenKeyModal() {
+  byId('modalTitle').textContent = 'Token GitHub';
+
+  byId('modalBody').innerHTML =
+    '<div class="modal-row"><span class="modal-label">Statut</span><span class="modal-value">' +
+      (ghToken() ? 'Token actif sur cet appareil' : 'Aucun token') +
+    '</span></div>' +
+    '<div style="margin-top:14px;"><label for="ghKeyInput">Remplacer le token</label>' +
+    '<input id="ghKeyInput" type="password" placeholder="github_pat_… ou ghp_…" autocomplete="off" spellcheck="false" style="width:100%;margin-top:5px;"></div>';
+
+  const actions = byId('modalActions');
+  actions.innerHTML = '';
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'primary';
+  saveBtn.style.flex = '1';
+  saveBtn.textContent = 'Enregistrer';
+  saveBtn.onclick = () => ghSaveToken('ghKeyInput');
+  actions.appendChild(saveBtn);
+
+  const clearBtn = document.createElement('button');
+  clearBtn.style.flex = '1';
+  clearBtn.style.color = '#f87171';
+  clearBtn.style.borderColor = 'rgba(239,68,68,.25)';
+  clearBtn.textContent = 'Effacer';
+  clearBtn.onclick = async () => {
+    const ok = await confirmDialog('Effacer le token GitHub de cet appareil ?', 'Effacer', true);
+    if (!ok) return;
+    ghClearToken();
+    closeCodeModal();
+  };
+  actions.appendChild(clearBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'small';
+  closeBtn.textContent = 'Fermer';
+  closeBtn.onclick = closeCodeModal;
+  actions.appendChild(closeBtn);
+
+  byId('codeModal').classList.remove('hidden');
 }
 async function ghApi(path, opts) {
   opts = opts || {};
@@ -1064,10 +1275,18 @@ function ghTextToB64(text) {
   return btoa(bin);
 }
 async function ghLoadRepos() {
-  const sel = byId('ghRepo');
-  if (!ghToken()) { toast('Enregistrez d\'abord votre token GitHub', true); return; }
+  const sel = byId('appUrl');
+  if (!sel) return;
 
-  sel.innerHTML = '<option value="">Chargement…</option>';
+  const placeholder = '<option value="">— enregistrez votre token GitHub —</option>';
+
+  if (!ghToken()) {
+    sel.innerHTML = placeholder;
+    return;
+  }
+
+  const previous = sel.value || localStorage.getItem(LS_APP) || '';
+  sel.innerHTML = '<option value="">Chargement des repos…</option>';
 
   try {
     let repos = [];
@@ -1077,26 +1296,100 @@ async function ghLoadRepos() {
       if (part.length < 100) break;
     }
 
-    repos = repos.filter(r => r.permissions && r.permissions.push && !r.archived);
+    repos = repos.filter(r => r.permissions && r.permissions.push && !r.archived && r.has_pages);
 
-    sel.innerHTML = '<option value="">— choisir un repo —</option>';
+    sel.innerHTML = '<option value="">— choisir une application —</option>';
     repos.forEach(r => {
+      const owner = (r.owner && r.owner.login) ? r.owner.login : r.full_name.split('/')[0];
+      const isUserSite = r.name.toLowerCase() === owner.toLowerCase() + '.github.io';
+      const url = 'https://' + owner.toLowerCase() + '.github.io/' + (isUserSite ? '' : r.name + '/');
+
       const o = document.createElement('option');
-      o.value = r.full_name;
+      o.value = url;
+      o.dataset.repo = r.full_name;
       o.dataset.branch = r.default_branch || 'main';
-      o.textContent = r.full_name + (r.private ? ' (privé)' : '');
+      o.dataset.name = r.name;
+      if (r.private) o.dataset.priv = '1';
+      ghLabelOption(o);
       sel.appendChild(o);
     });
 
-    const last = localStorage.getItem(LS_GH_REPO);
-    if (last && Array.from(sel.options).some(o => o.value === last)) sel.value = last;
+    if (previous && Array.from(sel.options).some(o => o.value === previous)) sel.value = previous;
 
-    log(repos.length + ' repo(s) GitHub chargé(s)', 'ok');
+    log(repos.length + ' application(s) GitHub Pages chargée(s)', 'ok');
+    ghUpdateRemoveBtn();
+    ghMarkProtected();
   } catch (e) {
-    sel.innerHTML = '<option value="">— erreur de chargement —</option>';
+    if (e.status === 401) {
+      localStorage.removeItem(LS_GH_TOKEN);
+      ghRefreshTokenStatus();
+      sel.innerHTML = placeholder;
+    } else {
+      sel.innerHTML = '<option value="">— erreur de chargement —</option>';
+    }
     log('Erreur GitHub : ' + (e.message || e), 'err');
     toast('GitHub : ' + (e.message || 'erreur'), true);
   }
+}
+function ghLabelOption(o) {
+  o.textContent =
+    (o.dataset.name || '') +
+    (o.dataset.priv ? ' (privé)' : '') +
+    (o.dataset.protected === '1' ? ' · protégé' : '');
+}
+async function ghCheckOption(o) {
+  const marker = '<' + '!--PWC-GATE:START';
+  try {
+    const resp = await fetch(o.value + 'index.html?pwc=' + Date.now(), { cache: 'no-store' });
+    if (!resp.ok) {
+      log('Vérification ' + (o.dataset.name || o.value) + ' : HTTP ' + resp.status, 'warn');
+      return;
+    }
+    const txt = await resp.text();
+    o.dataset.protected = txt.indexOf(marker) !== -1 ? '1' : '0';
+    ghLabelOption(o);
+  } catch (e) {
+    log('Vérification ' + (o.dataset.name || o.value) + ' impossible : ' + (e.message || e), 'warn');
+  }
+}
+function ghUpdateRemoveBtn() {
+  const sel = byId('appUrl');
+  const btn = byId('ghRemoveBtn');
+  if (!sel || !btn) return;
+
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt || !opt.dataset.repo) {
+    btn.classList.add('hidden');
+    return;
+  }
+
+  if (opt.dataset.protected === undefined) {
+    btn.classList.add('hidden');
+    ghCheckOption(opt).then(() => {
+      if (sel.options[sel.selectedIndex] === opt) {
+        btn.classList.toggle('hidden', opt.dataset.protected !== '1');
+      }
+    });
+    return;
+  }
+
+  btn.classList.toggle('hidden', opt.dataset.protected !== '1');
+}
+async function ghMarkProtected() {
+  const sel = byId('appUrl');
+  if (!sel) return;
+
+  const selected = sel.options[sel.selectedIndex];
+  const opts = Array.from(sel.options).filter(o => o.dataset.repo && o.dataset.protected === undefined);
+  opts.sort((a, b) => (a === selected ? -1 : 0) - (b === selected ? -1 : 0));
+
+  for (let i = 0; i < opts.length; i += 6) {
+    await Promise.all(opts.slice(i, i + 6).map(ghCheckOption));
+    ghUpdateRemoveBtn();
+  }
+
+  const n = Array.from(sel.options).filter(o => o.dataset.protected === '1').length;
+  log(n + ' application(s) protégée(s) détectée(s)', 'ok');
 }
 function pwcGateRuntime(WORKER) {
   var d = document;
@@ -1425,22 +1718,28 @@ async function ghWaitForPages(pagesUrl, id) {
 async function ghInstall() {
   if (ghState.busy) return;
 
-  const sel = byId('ghRepo');
-  const full = sel.value;
-  if (!full) { toast('Choisissez un repo', true); return; }
+  const sel = byId('appUrl');
+  const opt = sel.options[sel.selectedIndex];
+  const full = opt && opt.dataset.repo;
+  if (!full) { toast('Choisissez une application', true); return; }
 
   const base = workerUrl();
   if (!base) { toast('URL du Worker manquante', true); return; }
 
-  if (!confirm('Installer le module de protection dans ' + full + ' ?\nUn commit sera créé sur le repo.')) return;
+  const confirmed = await confirmDialog(
+    'Installer le module de protection dans ' + full + ' ?\nUn commit sera créé sur le repo.',
+    'Installer'
+  );
+  if (!confirmed) return;
 
   const btn = byId('ghInstallBtn');
+  const removeBtn = byId('ghRemoveBtn');
   const openBtn = byId('ghOpenBtn');
-  const defBranch = (sel.options[sel.selectedIndex].dataset.branch) || 'main';
 
   ghState.busy = true;
   ghState.openUrl = '';
   btn.disabled = true;
+  removeBtn.disabled = true;
   openBtn.classList.add('hidden');
   localStorage.setItem(LS_GH_REPO, full);
 
@@ -1448,63 +1747,34 @@ async function ghInstall() {
     ghSetProgress(0, 'Lecture du repo…');
     log('GitHub : lecture de ' + full, 'info');
 
-    let pages;
-    try {
-      pages = await ghApi('/repos/' + full + '/pages');
-    } catch (e) {
-      if (e.status === 404) throw new Error('GitHub Pages n\'est pas activé sur ce repo');
-      throw e;
-    }
-
-    const branch = (pages.source && pages.source.branch) || defBranch;
-    const dir = (pages.source && pages.source.path && pages.source.path !== '/')
-      ? pages.source.path.replace(/^\/+|\/+$/g, '') + '/'
-      : '';
-    const filePath = dir + 'index.html';
-
-    const parts = full.split('/');
-    let pagesUrl = pages.html_url || ('https://' + parts[0] + '.github.io/' + parts[1] + '/');
-    if (pagesUrl.slice(-1) !== '/') pagesUrl += '/';
-
-    const apiPath = '/repos/' + full + '/contents/' + filePath.split('/').map(encodeURIComponent).join('/');
-
-    let file;
-    try {
-      file = await ghApi(apiPath + '?ref=' + encodeURIComponent(branch));
-    } catch (e) {
-      if (e.status === 404) throw new Error('index.html introuvable (' + filePath + ' sur ' + branch + ')');
-      throw e;
-    }
-
-    let source = (file.content && file.encoding === 'base64') ? file.content : '';
-    if (!source) {
-      const blob = await ghApi('/repos/' + full + '/git/blobs/' + file.sha);
-      source = blob.content;
-    }
-    const original = ghB64ToText(source);
-    const reinstall = original.indexOf('<' + '!--PWC-GATE:START') !== -1;
+    const info = await ghReadIndex(full, opt.dataset.branch || 'main');
+    const reinstall = info.text.indexOf('<' + '!--PWC-GATE:START') !== -1;
 
     ghSetProgress(0, 'Ajout du module…');
     const id = Date.now().toString(36);
-    const updated = ghInjectModule(original, ghBuildModule(base, id));
+    const updated = ghInjectModule(info.text, ghBuildModule(base, id));
 
     ghSetProgress(0, 'Envoi du commit…');
-    await ghApi(apiPath, {
+    await ghApi(info.apiPath, {
       method: 'PUT',
       body: {
         message: (reinstall ? 'Mise à jour' : 'Ajout') + ' du module de protection par code (PWC)',
         content: ghTextToB64(updated),
-        sha: file.sha,
-        branch: branch
+        sha: info.file.sha,
+        branch: info.branch
       }
     });
-    log('GitHub : commit envoyé sur ' + full + ' (' + branch + ')', 'ok');
+    log('GitHub : commit envoyé sur ' + full + ' (' + info.branch + ')', 'ok');
 
-    const ready = await ghWaitForPages(pagesUrl, id);
+    opt.dataset.protected = '1';
+    ghLabelOption(opt);
+    ghUpdateRemoveBtn();
+
+    const ready = await ghWaitForPages(info.pagesUrl, id);
 
     if (ready) {
       ghSetProgress(100, 'GitHub Pages est à jour');
-      log('GitHub Pages à jour : ' + pagesUrl, 'ok');
+      log('GitHub Pages à jour : ' + info.pagesUrl, 'ok');
       toast('Application protégée et publiée');
       openBtn.textContent = 'Ouvrir l\'application';
     } else {
@@ -1514,7 +1784,7 @@ async function ghInstall() {
       openBtn.textContent = 'Ouvrir quand même';
     }
 
-    ghState.openUrl = pagesUrl;
+    ghState.openUrl = info.pagesUrl;
     openBtn.classList.remove('hidden');
 
   } catch (e) {
@@ -1524,10 +1794,135 @@ async function ghInstall() {
   } finally {
     ghState.busy = false;
     btn.disabled = false;
+    removeBtn.disabled = false;
   }
 }
 function ghOpenApp() {
   if (ghState.openUrl) window.open(ghState.openUrl, '_blank', 'noopener');
+}
+async function ghReadIndex(full, defBranch) {
+  let pages;
+  try {
+    pages = await ghApi('/repos/' + full + '/pages');
+  } catch (e) {
+    if (e.status === 404) throw new Error('GitHub Pages n\'est pas activé sur ce repo');
+    throw e;
+  }
+
+  const branch = (pages.source && pages.source.branch) || defBranch;
+  const dir = (pages.source && pages.source.path && pages.source.path !== '/')
+    ? pages.source.path.replace(/^\/+|\/+$/g, '') + '/'
+    : '';
+  const filePath = dir + 'index.html';
+
+  const parts = full.split('/');
+  let pagesUrl = pages.html_url || ('https://' + parts[0] + '.github.io/' + parts[1] + '/');
+  if (pagesUrl.slice(-1) !== '/') pagesUrl += '/';
+
+  const apiPath = '/repos/' + full + '/contents/' + filePath.split('/').map(encodeURIComponent).join('/');
+
+  let file;
+  try {
+    file = await ghApi(apiPath + '?ref=' + encodeURIComponent(branch));
+  } catch (e) {
+    if (e.status === 404) throw new Error('index.html introuvable (' + filePath + ' sur ' + branch + ')');
+    throw e;
+  }
+
+  let source = (file.content && file.encoding === 'base64') ? file.content : '';
+  if (!source) {
+    const blob = await ghApi('/repos/' + full + '/git/blobs/' + file.sha);
+    source = blob.content;
+  }
+
+  return {
+    pagesUrl: pagesUrl,
+    branch: branch,
+    apiPath: apiPath,
+    file: file,
+    text: ghB64ToText(source)
+  };
+}
+function ghStripModule(html) {
+  const START = '<' + '!--PWC-GATE:START';
+  const END = '<' + '!--PWC-GATE:END-->';
+
+  let s = html.indexOf(START);
+  if (s === -1) return html;
+
+  const e = html.indexOf(END, s);
+  if (e === -1) throw new Error('Module corrompu (marqueur de fin introuvable)');
+
+  let tail = e + END.length;
+  if (html.charAt(tail) === '\n') tail++;
+  if (s > 0 && html.charAt(s - 1) === '\n') s--;
+
+  return html.slice(0, s) + html.slice(tail);
+}
+async function ghRemoveModule() {
+  if (ghState.busy) return;
+
+  const sel = byId('appUrl');
+  const opt = sel.options[sel.selectedIndex];
+  const full = opt && opt.dataset.repo;
+  if (!full) { toast('Choisissez une application', true); return; }
+
+  const confirmed = await confirmDialog(
+    'Retirer le module de protection de ' + full + ' ?\nUn commit sera créé et l\'application redeviendra accessible à tous.',
+    'Retirer',
+    true
+  );
+  if (!confirmed) return;
+
+  const btn = byId('ghInstallBtn');
+  const removeBtn = byId('ghRemoveBtn');
+  const openBtn = byId('ghOpenBtn');
+
+  ghState.busy = true;
+  ghState.openUrl = '';
+  btn.disabled = true;
+  removeBtn.disabled = true;
+  openBtn.classList.add('hidden');
+
+  try {
+    ghSetProgress(0, 'Lecture du repo…');
+    log('GitHub : lecture de ' + full, 'info');
+
+    const info = await ghReadIndex(full, opt.dataset.branch || 'main');
+
+    if (info.text.indexOf('<' + '!--PWC-GATE:START') === -1) {
+      throw new Error('Aucun module trouvé dans index.html');
+    }
+
+    const updated = ghStripModule(info.text);
+
+    ghSetProgress(0, 'Envoi du commit…');
+    await ghApi(info.apiPath, {
+      method: 'PUT',
+      body: {
+        message: 'Retrait du module de protection par code (PWC)',
+        content: ghTextToB64(updated),
+        sha: info.file.sha,
+        branch: info.branch
+      }
+    });
+
+    opt.dataset.protected = '';
+    ghLabelOption(opt);
+    ghUpdateRemoveBtn();
+
+    ghSetProgress(100, 'Module retiré (la publication GitHub Pages peut prendre environ 1 min)');
+    log('GitHub : module retiré de ' + full, 'ok');
+    toast('Module retiré');
+  } catch (e) {
+    ghSetProgress(0, 'Échec : ' + (e.message || e), true);
+    log('Erreur retrait : ' + (e.message || e), 'err');
+    toast('Retrait impossible : ' + (e.message || ''), true);
+  } finally {
+    ghState.busy = false;
+    btn.disabled = false;
+    removeBtn.disabled = false;
+  }
 }
 
 window.addEventListener('error', (e) => {
@@ -1562,9 +1957,33 @@ window.addEventListener('unhandledrejection', (e) => {
       if (e.target === modal) closeCodeModal();
     });
   }
+  let savedSession = '';
+  try { savedSession = sessionStorage.getItem(SS_ADMIN) || ''; } catch (x) {}
+  if (savedSession && savedWorker) {
+    byId('adminToken').value = savedSession;
+    connect();
+  }
 })();
 (function ghInit() {
   ghRefreshTokenStatus();
+  if (ghToken()) ghLoadRepos();
+})();
+(function keysInit() {
+  const bind = (id, fn) => {
+    const el = byId(id);
+    if (!el) return;
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        fn();
+      }
+    });
+  };
+  bind('workerUrl', connect);
+  bind('adminToken', connect);
+  bind('userLabel', createCode);
+  bind('customCode', createCode);
+  bind('days', createCode);
 })();
 </script>
 <script>
