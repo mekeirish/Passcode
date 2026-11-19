@@ -2653,6 +2653,30 @@ function pwcChildLoader(WORKER, APP) {
   var btn = d.getElementById('b');
   var err = d.getElementById('e');
 
+  var bs = getComputedStyle(d.body);
+  var cs = getComputedStyle(btn);
+  var col = {
+    bg: bs.backgroundColor,
+    fg: bs.color,
+    acc: cs.backgroundColor,
+    accFg: cs.color,
+    line: 'rgba(128,128,128,.4)'
+  };
+
+  var installed = false;
+  var floatHost = null;
+  var inlineBtn = null;
+
+  var ua = navigator.userAgent || '';
+  var isIOS = /iphone|ipad|ipod/i.test(ua) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var isAndroid = /android/i.test(ua);
+
+  function isStandalone() {
+    return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+      window.navigator.standalone === true;
+  }
+
   function deviceId() {
     var k = 'pwc_device_id';
     try {
@@ -2673,6 +2697,176 @@ function pwcChildLoader(WORKER, APP) {
     btn.textContent = b ? 'Vérification…' : 'Déverrouiller';
   }
 
+  /* ---------- Installation sur l'écran d'accueil ---------- */
+  function shadowHost(id) {
+    var host = d.createElement('div');
+    host.id = id;
+    var root = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
+    return { host: host, root: root };
+  }
+
+  function helpSteps() {
+    if (isIOS) {
+      return [
+        'Touchez le bouton Partager de Safari (le carré avec une flèche).',
+        'Faites défiler puis touchez « Sur l\'écran d\'accueil ».',
+        'Touchez « Ajouter » : l\'icône apparaît sur votre écran d\'accueil.'
+      ];
+    }
+    if (isAndroid) {
+      return [
+        'Ouvrez le menu du navigateur (les trois points).',
+        'Touchez « Installer l\'application » ou « Ajouter à l\'écran d\'accueil ».',
+        'Confirmez : l\'icône apparaît sur votre écran d\'accueil.'
+      ];
+    }
+    return [
+      'Cherchez l\'icône d\'installation à droite de la barre d\'adresse.',
+      'Ou ouvrez le menu du navigateur puis « Installer l\'application ».'
+    ];
+  }
+
+  function openHelp() {
+    var s = shadowHost('pwc-help');
+
+    var wrap = d.createElement('div');
+    wrap.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.55);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;';
+
+    var box = d.createElement('div');
+    box.style.cssText = 'width:100%;max-width:340px;padding:20px;border-radius:18px;box-sizing:border-box;background:' + col.bg + ';color:' + col.fg + ';border:1px solid ' + col.line + ';';
+
+    var title = d.createElement('div');
+    title.textContent = 'Installer l\'application';
+    title.style.cssText = 'font-size:16px;font-weight:800;margin:0 0 12px;';
+
+    var list = d.createElement('ol');
+    list.style.cssText = 'margin:0 0 16px;padding-left:20px;font-size:13px;line-height:1.55;';
+    helpSteps().forEach(function (t) {
+      var li = d.createElement('li');
+      li.textContent = t;
+      li.style.cssText = 'margin:0 0 6px;';
+      list.appendChild(li);
+    });
+
+    var ok = d.createElement('button');
+    ok.type = 'button';
+    ok.textContent = 'Compris';
+    ok.style.cssText = 'display:block;width:100%;height:44px;border:0;border-radius:12px;cursor:pointer;font-size:14px;font-weight:800;background:' + col.acc + ';color:' + col.accFg + ';';
+
+    function close() {
+      if (s.host.parentNode) s.host.parentNode.removeChild(s.host);
+    }
+    ok.addEventListener('click', close);
+    wrap.addEventListener('click', function (e) {
+      if (e.target === wrap) close();
+    });
+
+    box.appendChild(title);
+    box.appendChild(list);
+    box.appendChild(ok);
+    wrap.appendChild(box);
+    s.root.appendChild(wrap);
+    d.documentElement.appendChild(s.host);
+  }
+
+  function install() {
+    var evt = window.__pwcInstallEvt;
+    if (!evt) {
+      openHelp();
+      return;
+    }
+    window.__pwcInstallEvt = null;
+    try {
+      evt.prompt();
+      if (evt.userChoice && evt.userChoice.then) {
+        evt.userChoice.then(function () { refresh(); });
+      }
+    } catch (e) {
+      openHelp();
+    }
+  }
+
+  function makeButton(floating) {
+    var b = d.createElement('button');
+    b.type = 'button';
+    b.setAttribute('aria-label', 'Installer l\'application');
+    b.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>' +
+      '<span>Installer l\'application</span>';
+
+    var base = 'display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;height:44px;';
+    b.style.cssText = floating
+      ? base + 'padding:0 16px;border:0;border-radius:22px;background:' + col.acc + ';color:' + col.accFg + ';box-shadow:0 6px 20px rgba(0,0,0,.35);'
+      : base + 'width:100%;margin:12px 0 0;border-radius:12px;background:transparent;color:inherit;border:1px solid ' + col.line + ';';
+
+    b.addEventListener('click', install);
+    return b;
+  }
+
+  function refresh() {
+    var show = !(installed || isStandalone());
+    if (inlineBtn) inlineBtn.style.display = show ? 'flex' : 'none';
+    if (!show && floatHost && floatHost.parentNode) {
+      floatHost.parentNode.removeChild(floatHost);
+    }
+  }
+
+  function bindWindow() {
+    window.addEventListener('beforeinstallprompt', function (e) {
+      e.preventDefault();
+      window.__pwcInstallEvt = e;
+      refresh();
+    });
+    window.addEventListener('pwc-install', refresh);
+    window.addEventListener('appinstalled', function () {
+      installed = true;
+      refresh();
+    });
+  }
+
+  function mountFloating() {
+    if (installed || isStandalone()) return;
+    try {
+      if (sessionStorage.getItem('pwc_install_hide') === '1') return;
+    } catch (e) {}
+
+    var s = shadowHost('pwc-install');
+    floatHost = s.host;
+    floatHost.style.cssText = 'position:fixed;right:14px;bottom:calc(14px + env(safe-area-inset-bottom));z-index:2147483646;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;';
+
+    var row = d.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;';
+
+    var x = d.createElement('button');
+    x.type = 'button';
+    x.textContent = '×';
+    x.setAttribute('aria-label', 'Masquer');
+    x.style.cssText = 'width:28px;height:28px;border:0;border-radius:50%;cursor:pointer;font-size:16px;line-height:1;background:rgba(0,0,0,.55);color:#fff;';
+    x.addEventListener('click', function () {
+      try { sessionStorage.setItem('pwc_install_hide', '1'); } catch (e) {}
+      if (floatHost && floatHost.parentNode) floatHost.parentNode.removeChild(floatHost);
+    });
+
+    row.appendChild(makeButton(true));
+    row.appendChild(x);
+    s.root.appendChild(row);
+    d.documentElement.appendChild(floatHost);
+
+    setTimeout(function () {
+      if (floatHost && !floatHost.isConnected && !installed) d.documentElement.appendChild(floatHost);
+    }, 2000);
+  }
+
+  inlineBtn = makeButton(false);
+  err.parentNode.appendChild(inlineBtn);
+  bindWindow();
+  refresh();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(function () {});
+  }
+
+  /* ---------- Vérification du code ---------- */
   form.addEventListener('submit', function (ev) {
     ev.preventDefault();
     var code = (input.value || '').trim();
@@ -2696,6 +2890,8 @@ function pwcChildLoader(WORKER, APP) {
           d.open();
           d.write(j.html);
           d.close();
+          bindWindow();
+          mountFloating();
           return;
         }
         if (res.status === 429) throw new Error('Trop de tentatives, réessayez dans une minute');
@@ -2746,6 +2942,7 @@ function ghBuildLoader(base, id, title, manifest, hasManifest, iconName) {
     '<meta name="apple-mobile-web-app-title" content="' + escapeHtml(title) + '">\n' +
     (hasManifest ? '<link rel="manifest" href="./manifest.json">\n' : '') +
     (iconName ? '<link rel="icon" href="./' + iconName + '">\n<link rel="apple-touch-icon" href="./' + iconName + '">\n' : '') +
+    lt + 'script>window.addEventListener("beforeinstallprompt",function(e){e.preventDefault();window.__pwcInstallEvt=e;try{window.dispatchEvent(new Event("pwc-install"))}catch(x){}});' + lt + '/script>\n' +
     lt + '!--PWC-CHILD id=' + id + '-->\n';
 
   const lock = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
