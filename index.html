@@ -849,12 +849,16 @@ function renderCodes() {
       ? new Date(expiresAt).toLocaleDateString('fr-FR')
       : '∞';
 
+    const maxD = (c.max_devices === undefined || c.max_devices === null) ? 1 : c.max_devices;
+    const nD = c.devices || 0;
+    const devLabel = nD + '/' + (maxD === 0 ? '∞' : maxD) + ' appareil' + (nD > 1 ? 's' : '');
+
     item.innerHTML =
       '<div class="item-info">' +
         '<div class="item-name' + (isExpiring ? ' expiring' : '') + '">' +
           escapeHtml(c.label || 'Sans nom') +
         '</div>' +
-        '<div class="item-meta">Expiration : ' + exp + '</div>' +
+        '<div class="item-meta">Expiration : ' + exp + ' · ' + devLabel + '</div>' +
       '</div>' +
       '<span class="badge ' + escapeHtml(c.status || '') + '">' +
         escapeHtml(c.status || '—') +
@@ -1014,13 +1018,20 @@ function openCodeModal(c) {
   }
 
   const editable = c.status !== 'revoked';
+  const maxD = (c.max_devices === undefined || c.max_devices === null) ? 1 : c.max_devices;
+  const nD = c.devices || 0;
 
   body.innerHTML =
     '<div class="modal-row"><span class="modal-label">Identifiant</span><span class="modal-value">' + escapeHtml(c.id || '') + '</span></div>' +
     '<div style="margin-top:14px;"><label for="editCodeLabel">Nom</label><input id="editCodeLabel" type="text" maxlength="100" value="' + escapeHtml(c.label || '') + '" ' + (editable ? '' : 'disabled') + ' style="width:100%;margin-top:5px;"></div>' +
     '<div style="margin-top:12px;"><label for="editCodeApp">URL de l’application</label><input id="editCodeApp" type="url" value="' + escapeHtml(c.app || '') + '" ' + (editable ? '' : 'disabled') + ' style="width:100%;margin-top:5px;"></div>' +
     '<div style="margin-top:12px;"><label for="editCodeDuration">Durée en jours (0 = illimitée)</label><input id="editCodeDuration" type="number" min="0" max="3650" value="' + duration + '" ' + (editable ? '' : 'disabled') + ' style="width:100%;margin-top:5px;"></div>' +
-    '<div class="modal-row" style="margin-top:14px;"><span class="modal-label">Créé le</span><span class="modal-value">' + created + '</span></div>' +
+    '<div style="margin-top:12px;"><label for="editCodeDevices">Appareils autorisés (0 = illimité)</label><input id="editCodeDevices" type="number" min="0" max="100" value="' + maxD + '" ' + (editable ? '' : 'disabled') + ' style="width:100%;margin-top:5px;"></div>' +
+    '<div class="modal-row" style="margin-top:14px;"><span class="modal-label">Appareils liés</span><span class="modal-value">' + nD + ' / ' + (maxD === 0 ? '∞' : maxD) + '</span></div>' +
+    (nD > 0
+      ? '<button type="button" class="small" style="width:100%;margin-top:8px;" onclick="resetDevices(\'' + escapeHtml(c.id || '') + '\')">Délier les appareils</button>'
+      : '') +
+    '<div class="modal-row" style="margin-top:6px;"><span class="modal-label">Créé le</span><span class="modal-value">' + created + '</span></div>' +
     '<div class="modal-row"><span class="modal-label">Expire le</span><span class="modal-value">' + exp + '</span></div>' +
     '<div class="modal-row"><span class="modal-label">Statut</span><span class="modal-value"><span class="badge ' + escapeHtml(c.status || '') + '">' + escapeHtml(c.status || '—') + '</span></span></div>';
 
@@ -1093,6 +1104,7 @@ async function saveCodeEdits(id) {
   const label = (byId('editCodeLabel').value || '').trim();
   const app = (byId('editCodeApp').value || '').trim();
   const expiresInDays = Number(byId('editCodeDuration').value);
+  const maxDevices = Number(byId('editCodeDevices').value);
 
   if (!label) {
     toast('Le nom est obligatoire', true);
@@ -1106,6 +1118,11 @@ async function saveCodeEdits(id) {
 
   if (!Number.isInteger(expiresInDays) || expiresInDays < 0 || expiresInDays > 3650) {
     toast('La durée doit être comprise entre 0 et 3650 jours', true);
+    return;
+  }
+
+  if (!Number.isInteger(maxDevices) || maxDevices < 0 || maxDevices > 100) {
+    toast('Appareils : entier entre 0 et 100', true);
     return;
   }
 
@@ -1129,7 +1146,8 @@ async function saveCodeEdits(id) {
         body: JSON.stringify({
           label,
           app,
-          expiresInDays
+          expiresInDays,
+          maxDevices
         })
       }
     );
@@ -1151,6 +1169,42 @@ async function saveCodeEdits(id) {
       btn.disabled = false;
       btn.textContent = 'Enregistrer';
     }
+  }
+}
+async function resetDevices(id) {
+  if (!id) return;
+
+  const confirmed = await confirmDialog(
+    'Délier tous les appareils de ce code ?\nLes utilisateurs devront ressaisir leur code, et le premier appareil à le faire sera lié à nouveau.',
+    'Délier',
+    true
+  );
+  if (!confirmed) return;
+
+  const base = workerUrl().replace(/\/+$/, '');
+
+  try {
+    const resp = await fetch(
+      base + '/admin/codes/' + encodeURIComponent(id) + '/devices/reset',
+      {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + adminToken }
+      }
+    );
+
+    const data = await resp.json().catch(() => ({}));
+    log('Déliage appareils → ' + resp.status, resp.ok ? 'ok' : 'warn');
+
+    if (!resp.ok) {
+      throw new Error(data.error || ('HTTP ' + resp.status));
+    }
+
+    toast('Appareils déliés');
+    closeCodeModal();
+    await loadCodes();
+  } catch (e) {
+    log('Erreur déliage : ' + (e.message || e), 'err');
+    toast('Déliage impossible : ' + (e.message || ''), true);
   }
 }
 function closeCodeModal() {
@@ -1286,8 +1340,18 @@ async function ensureSchema(env) {
   await env.DB.batch([
     env.DB.prepare('CREATE TABLE IF NOT EXISTS access_codes (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, label TEXT, app TEXT, created_at INTEGER NOT NULL, expires_at INTEGER, revoked_at INTEGER)'),
     env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_access_codes_hash ON access_codes (code_hash)'),
-    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_access_codes_app ON access_codes (app)')
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_access_codes_app ON access_codes (app)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS code_devices (code_id TEXT NOT NULL, device_hash TEXT NOT NULL, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, PRIMARY KEY (code_id, device_hash))')
   ]);
+  const info = await env.DB.prepare('PRAGMA table_info(access_codes)').all();
+  const cols = (info.results || []).map(function (r) { return r.name; });
+  if (cols.indexOf('max_devices') === -1) {
+    try {
+      await env.DB.prepare('ALTER TABLE access_codes ADD COLUMN max_devices INTEGER NOT NULL DEFAULT 1').run();
+    } catch (e) {
+      if (!/duplicate column/i.test(String(e && e.message ? e.message : e))) throw e;
+    }
+  }
   schemaReady.add(env);
 }
 
@@ -1340,10 +1404,28 @@ async function handleVerify(request, env) {
   if (!env.DB) return json({ error: 'Base de données indisponible' }, 503);
   await ensureSchema(env);
   const hash = await sha256Hex(raw);
-  const row = await env.DB.prepare('SELECT id, expires_at, revoked_at FROM access_codes WHERE code_hash = ?').bind(hash).first();
+  const row = await env.DB.prepare('SELECT id, expires_at, revoked_at, max_devices FROM access_codes WHERE code_hash = ?').bind(hash).first();
   if (!row) return json({ valid: false });
   if (row.revoked_at) return json({ valid: false });
   if (row.expires_at && row.expires_at <= Date.now()) return json({ valid: false });
+
+  const device = (body && typeof body.device === 'string') ? body.device.trim() : '';
+  if (device) {
+    if (device.length < 8 || device.length > 128) return json({ error: 'Identifiant appareil invalide' }, 400);
+    const dh = await sha256Hex(device);
+    const now = Date.now();
+    const known = await env.DB.prepare('SELECT 1 AS ok FROM code_devices WHERE code_id = ? AND device_hash = ?').bind(row.id, dh).first();
+    if (known) {
+      await env.DB.prepare('UPDATE code_devices SET last_seen = ? WHERE code_id = ? AND device_hash = ?').bind(now, row.id, dh).run();
+    } else {
+      const max = (row.max_devices === null || row.max_devices === undefined) ? 1 : row.max_devices;
+      if (max > 0) {
+        const cnt = await env.DB.prepare('SELECT COUNT(*) AS n FROM code_devices WHERE code_id = ?').bind(row.id).first();
+        if (cnt && cnt.n >= max) return json({ valid: false, reason: 'device_limit' });
+      }
+      await env.DB.prepare('INSERT OR IGNORE INTO code_devices (code_id, device_hash, first_seen, last_seen) VALUES (?, ?, ?, ?)').bind(row.id, dh, now, now).run();
+    }
+  }
   return json({ valid: true });
 }
 
@@ -1369,6 +1451,12 @@ async function handleCreateCode(request, env) {
     if (!isFinite(v) || v < 0 || v > 3650) return json({ error: 'expiresInDays invalide' }, 400);
     expiresInDays = v;
   }
+  let maxDevices = 1;
+  if (body && body.maxDevices !== undefined && body.maxDevices !== null) {
+    const m = Number(body.maxDevices);
+    if (!Number.isInteger(m) || m < 0 || m > 100) return json({ error: 'maxDevices invalide' }, 400);
+    maxDevices = m;
+  }
   if (!env.DB) return json({ error: 'Base de données indisponible' }, 503);
   await ensureSchema(env);
   let code;
@@ -1387,11 +1475,11 @@ async function handleCreateCode(request, env) {
   const now = Date.now();
   const expiresAt = (expiresInDays !== null && expiresInDays > 0) ? now + expiresInDays * 86400000 : null;
   try {
-    await env.DB.prepare('INSERT INTO access_codes (id, code_hash, label, app, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, NULL)').bind(id, hash, label, app, now, expiresAt).run();
+    await env.DB.prepare('INSERT INTO access_codes (id, code_hash, label, app, created_at, expires_at, revoked_at, max_devices) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)').bind(id, hash, label, app, now, expiresAt, maxDevices).run();
   } catch (e) {
     return json({ error: 'Création impossible' }, 500);
   }
-  return json({ id: id, code: code, label: label, app: app, expires_at: expiresAt, created_at: now }, 201);
+  return json({ id: id, code: code, label: label, app: app, expires_at: expiresAt, created_at: now, max_devices: maxDevices }, 201);
 }
 
 async function handleListCodes(request, env, url) {
@@ -1401,18 +1489,19 @@ async function handleListCodes(request, env, url) {
   try {
     await ensureSchema(env);
     const appFilter = url.searchParams.get('app');
+    const cols = 'c.id, c.label, c.app, c.created_at, c.expires_at, c.revoked_at, c.max_devices, (SELECT COUNT(*) FROM code_devices d WHERE d.code_id = c.id) AS devices';
     let result;
     if (appFilter) {
-      result = await env.DB.prepare('SELECT id, label, app, created_at, expires_at, revoked_at FROM access_codes WHERE app = ? ORDER BY created_at DESC LIMIT 200').bind(appFilter).all();
+      result = await env.DB.prepare('SELECT ' + cols + ' FROM access_codes c WHERE c.app = ? ORDER BY c.created_at DESC LIMIT 200').bind(appFilter).all();
     } else {
-      result = await env.DB.prepare('SELECT id, label, app, created_at, expires_at, revoked_at FROM access_codes ORDER BY created_at DESC LIMIT 200').all();
+      result = await env.DB.prepare('SELECT ' + cols + ' FROM access_codes c ORDER BY c.created_at DESC LIMIT 200').all();
     }
     const now = Date.now();
     const rows = (result.results || []).map(function (r) {
       let status = 'active';
       if (r.revoked_at) status = 'revoked';
       else if (r.expires_at && r.expires_at <= now) status = 'expired';
-      return { id: r.id, label: r.label, app: r.app, created_at: r.created_at, expires_at: r.expires_at, revoked_at: r.revoked_at, status: status };
+      return { id: r.id, label: r.label, app: r.app, created_at: r.created_at, expires_at: r.expires_at, revoked_at: r.revoked_at, max_devices: r.max_devices, devices: r.devices, status: status };
     });
     return json({ codes: rows });
   } catch (e) {
@@ -1465,11 +1554,31 @@ async function handleUpdateCode(request, env, id) {
     sets.push('expires_at = ?');
     vals.push(v > 0 ? Date.now() + v * 86400000 : null);
   }
+  if (body && body.maxDevices !== undefined) {
+    const m = Number(body.maxDevices);
+    if (!Number.isInteger(m) || m < 0 || m > 100) return json({ error: 'maxDevices invalide' }, 400);
+    sets.push('max_devices = ?');
+    vals.push(m);
+  }
   if (!sets.length) return json({ error: 'Rien à modifier' }, 400);
   vals.push(id);
   const res = await env.DB.prepare('UPDATE access_codes SET ' + sets.join(', ') + ' WHERE id = ? AND revoked_at IS NULL').bind(...vals).run();
   if (!res.meta || res.meta.changes === 0) return json({ error: 'Code introuvable ou révoqué' }, 404);
   return json({ updated: true, id: id });
+}
+
+async function handleResetDevices(request, env, id) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const allowed = await checkRateLimit(env, ip, 'admin');
+  if (!allowed) return json({ error: 'Trop de tentatives' }, 429);
+  const auth = await checkAdmin(request, env);
+  if (!auth.ok) return auth.response;
+  if (!env.DB) return json({ error: 'Base de données indisponible' }, 503);
+  await ensureSchema(env);
+  const exists = await env.DB.prepare('SELECT id FROM access_codes WHERE id = ?').bind(id).first();
+  if (!exists) return json({ error: 'Code introuvable' }, 404);
+  const res = await env.DB.prepare('DELETE FROM code_devices WHERE code_id = ?').bind(id).run();
+  return json({ reset: true, id: id, removed: (res.meta && res.meta.changes) || 0 });
 }
 
 async function handleDeleteCode(request, env, id) {
@@ -1480,7 +1589,11 @@ async function handleDeleteCode(request, env, id) {
   if (!auth.ok) return auth.response;
   if (!env.DB) return json({ error: 'Base de données indisponible' }, 503);
   await ensureSchema(env);
-  const res = await env.DB.prepare('DELETE FROM access_codes WHERE id = ?').bind(id).run();
+  const results = await env.DB.batch([
+    env.DB.prepare('DELETE FROM code_devices WHERE code_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM access_codes WHERE id = ?').bind(id)
+  ]);
+  const res = results[1];
   if (!res.meta || res.meta.changes === 0) return json({ error: 'Code introuvable' }, 404);
   return json({ deleted: true, id: id });
 }
@@ -1511,6 +1624,10 @@ export default {
       if (parts.length === 5 && parts[1] === 'admin' && parts[2] === 'codes' && parts[4] === 'revoke' && parts[3]) {
         if (method !== 'POST') return json({ error: 'Méthode non autorisée' }, 405);
         return await handleRevokeCode(request, env, parts[3]);
+      }
+      if (parts.length === 6 && parts[1] === 'admin' && parts[2] === 'codes' && parts[4] === 'devices' && parts[5] === 'reset' && parts[3]) {
+        if (method !== 'POST') return json({ error: 'Méthode non autorisée' }, 405);
+        return await handleResetDevices(request, env, parts[3]);
       }
       return json({ error: 'Route inconnue' }, 404);
     } catch (err) {
@@ -1747,6 +1864,22 @@ function pwcGateRuntime(WORKER) {
   var prevOverflow = root.style.overflow;
   root.style.overflow = 'hidden';
 
+  /* ---------- Identifiant d'appareil ---------- */
+  function deviceId() {
+    var k = 'pwc_device_id';
+    try {
+      var v = localStorage.getItem(k);
+      if (v && v.length >= 8) return v;
+      v = (window.crypto && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : (Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
+      localStorage.setItem(k, v);
+      return v;
+    } catch (e) {
+      return window.__pwcDev || (window.__pwcDev = Date.now().toString(36) + Math.random().toString(36).slice(2) + 'xx');
+    }
+  }
+
   /* ---------- Outils couleurs ---------- */
   function parse(str) {
     var m = /rgba?\(([^)]+)\)/.exec(str || '');
@@ -1950,7 +2083,7 @@ function pwcGateRuntime(WORKER) {
     fetch(WORKER + '/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: code })
+      body: JSON.stringify({ code: code, device: deviceId() })
     })
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) {
@@ -1962,7 +2095,11 @@ function pwcGateRuntime(WORKER) {
         if (res.status === 429) throw new Error('Trop de tentatives, réessayez dans une minute');
         if (!res.ok) throw new Error((res.data && res.data.error) || 'Erreur serveur');
         input.value = '';
-        err.textContent = 'Code invalide';
+        if (res.data && res.data.reason === 'device_limit') {
+          err.textContent = 'Code déjà utilisé sur un autre appareil';
+        } else {
+          err.textContent = 'Code invalide';
+        }
         input.focus();
       })
       .catch(function (ex) {
