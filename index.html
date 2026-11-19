@@ -295,7 +295,9 @@
     </div>
 <div id="ghPanel" class="hidden" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06);">
   <button id="ghInstallBtn" class="primary" style="width:100%;" onclick="ghInstall()">Installer le module dans l'application choisie</button>
+  <button id="ghChildBtn" style="width:100%;margin-top:8px;" onclick="openChildModal()">Enfanter (version payante protégée)</button>
   <button id="ghRemoveBtn" class="hidden" style="width:100%;margin-top:8px;color:#f87171;border-color:rgba(239,68,68,.25);" onclick="ghRemoveModule()">Retirer le module de protection</button>
+  <button id="ghSyncBtn" class="primary hidden" style="width:100%;" onclick="ghSync()">Synchroniser l'application payante</button>
 
   <div id="ghProgress" class="hidden" style="margin-top:10px;">
     <div id="ghProgressText" class="item-meta" style="margin-bottom:6px;"></div>
@@ -903,6 +905,7 @@ async function loadCodes() {
     codesCache = codes;
     renderAppFilters(codes);
     renderCodes();
+    ghLoadChildren();
   } catch (e) {
     list.innerHTML = '<div class="item-meta" style="text-align:center;padding:8px;color:#f87171;">Erreur de chargement</div>';
     log('Erreur chargement codes : ' + (e.message || e), 'err');
@@ -1285,18 +1288,20 @@ function ghOpenKeyModal() {
 
   byId('codeModal').classList.remove('hidden');
 }
-const WORKER_CODE = `const CORS = {
+const WORKER_CODE = String.raw`const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Max-Age': '86400'
 };
 
+const MAX_APP_BYTES = 10 * 1024 * 1024;
+
 function json(data, status) {
   status = status || 200;
   return new Response(JSON.stringify(data), {
     status: status,
-    headers: { 'Content-Type': 'application/json', ...CORS }
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...CORS }
   });
 }
 
@@ -1332,6 +1337,27 @@ function generateCode(len) {
   let out = '';
   for (let i = 0; i < len; i++) out += alphabet[bytes[i] % alphabet.length];
   return out;
+}
+
+function normApp(u) {
+  return String(u || '').trim().toLowerCase().replace(/\/+$/, '').replace(/\/index\.html$/, '').replace(/\/+$/, '');
+}
+
+function cleanAppId(s) {
+  let id;
+  try { id = decodeURIComponent(String(s || '')); } catch (e) { return null; }
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/.test(id) ? id : null;
+}
+
+function watermark(html, label, codeId) {
+  const safe = String(label || 'utilisateur').replace(/[<>&"'\-\r\n]/g, ' ').slice(0, 100);
+  const tag = '<' + '!-- licence : ' + safe + ' / ' + String(codeId || '').slice(0, 8) + ' --' + '>';
+  const m = /<body[^>]*>/i.exec(html);
+  if (m) {
+    const at = m.index + m[0].length;
+    return html.slice(0, at) + '\n' + tag + html.slice(at);
+  }
+  return html + '\n' + tag;
 }
 
 const schemaReady = new WeakSet();
@@ -1381,6 +1407,23 @@ async function checkAdmin(request, env) {
   return { ok: true };
 }
 
+async function checkDevice(env, row, device) {
+  const dh = await sha256Hex(device);
+  const now = Date.now();
+  const known = await env.DB.prepare('SELECT 1 AS ok FROM code_devices WHERE code_id = ? AND device_hash = ?').bind(row.id, dh).first();
+  if (known) {
+    await env.DB.prepare('UPDATE code_devices SET last_seen = ? WHERE code_id = ? AND device_hash = ?').bind(now, row.id, dh).run();
+    return true;
+  }
+  const max = (row.max_devices === null || row.max_devices === undefined) ? 1 : row.max_devices;
+  if (max > 0) {
+    const cnt = await env.DB.prepare('SELECT COUNT(*) AS n FROM code_devices WHERE code_id = ?').bind(row.id).first();
+    if (cnt && cnt.n >= max) return false;
+  }
+  await env.DB.prepare('INSERT OR IGNORE INTO code_devices (code_id, device_hash, first_seen, last_seen) VALUES (?, ?, ?, ?)').bind(row.id, dh, now, now).run();
+  return true;
+}
+
 async function handleVerify(request, env) {
   let body;
   try {
@@ -1412,21 +1455,123 @@ async function handleVerify(request, env) {
   const device = (body && typeof body.device === 'string') ? body.device.trim() : '';
   if (device) {
     if (device.length < 8 || device.length > 128) return json({ error: 'Identifiant appareil invalide' }, 400);
-    const dh = await sha256Hex(device);
-    const now = Date.now();
-    const known = await env.DB.prepare('SELECT 1 AS ok FROM code_devices WHERE code_id = ? AND device_hash = ?').bind(row.id, dh).first();
-    if (known) {
-      await env.DB.prepare('UPDATE code_devices SET last_seen = ? WHERE code_id = ? AND device_hash = ?').bind(now, row.id, dh).run();
-    } else {
-      const max = (row.max_devices === null || row.max_devices === undefined) ? 1 : row.max_devices;
-      if (max > 0) {
-        const cnt = await env.DB.prepare('SELECT COUNT(*) AS n FROM code_devices WHERE code_id = ?').bind(row.id).first();
-        if (cnt && cnt.n >= max) return json({ valid: false, reason: 'device_limit' });
-      }
-      await env.DB.prepare('INSERT OR IGNORE INTO code_devices (code_id, device_hash, first_seen, last_seen) VALUES (?, ?, ?, ?)').bind(row.id, dh, now, now).run();
-    }
+    const okDevice = await checkDevice(env, row, device);
+    if (!okDevice) return json({ valid: false, reason: 'device_limit' });
   }
   return json({ valid: true });
+}
+
+async function handleAppLoad(request, env, id) {
+  if (!env.APP_STORE) return json({ error: 'Stockage des applications indisponible (binding APP_STORE absent)' }, 503);
+  if (!env.DB) return json({ error: 'Base de données indisponible' }, 503);
+  let body;
+  try {
+    const text = await request.text();
+    if (text.length > 2048) return json({ error: 'Payload trop volumineux' }, 413);
+    body = JSON.parse(text);
+  } catch (e) {
+    return json({ error: 'JSON invalide' }, 400);
+  }
+  const raw = body && body.code;
+  if (!raw || typeof raw !== 'string' || raw.length > 256) {
+    return json({ error: 'Code manquant ou invalide' }, 400);
+  }
+  const device = (body && typeof body.device === 'string') ? body.device.trim() : '';
+  if (device.length < 8 || device.length > 128) {
+    return json({ error: 'Identifiant appareil requis' }, 400);
+  }
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const allowed = await checkRateLimit(env, ip, 'app');
+  if (!allowed) return json({ error: 'Trop de tentatives' }, 429);
+
+  const meta = await env.APP_STORE.getWithMetadata('meta:' + id);
+  if (!meta || meta.value === null || !meta.metadata) {
+    return json({ valid: false, reason: 'unknown_app' }, 404);
+  }
+
+  await ensureSchema(env);
+  const hash = await sha256Hex(raw);
+  const row = await env.DB.prepare('SELECT id, label, app, expires_at, revoked_at, max_devices FROM access_codes WHERE code_hash = ?').bind(hash).first();
+  if (!row || row.revoked_at || (row.expires_at && row.expires_at <= Date.now())) {
+    return json({ valid: false, reason: 'invalid' });
+  }
+  if (!row.app || normApp(row.app) !== normApp(meta.metadata.app)) {
+    return json({ valid: false, reason: 'wrong_app' });
+  }
+
+  const okDevice = await checkDevice(env, row, device);
+  if (!okDevice) return json({ valid: false, reason: 'device_limit' });
+
+  const html = await env.APP_STORE.get('app:' + id);
+  if (html === null) return json({ valid: false, reason: 'unavailable' }, 404);
+
+  return json({ valid: true, html: watermark(html, row.label, row.id) });
+}
+
+async function handlePutApp(request, env, id) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const allowed = await checkRateLimit(env, ip, 'admin');
+  if (!allowed) return json({ error: 'Trop de tentatives' }, 429);
+  const auth = await checkAdmin(request, env);
+  if (!auth.ok) return auth.response;
+  if (!env.APP_STORE) return json({ error: 'Binding KV "APP_STORE" absent' }, 503);
+  let body;
+  try {
+    const text = await request.text();
+    if (text.length > MAX_APP_BYTES + 4096) return json({ error: 'Application trop volumineuse (10 Mo maximum)' }, 413);
+    body = JSON.parse(text);
+  } catch (e) {
+    return json({ error: 'JSON invalide' }, 400);
+  }
+  const html = body && body.html;
+  const app = body && body.app;
+  const source = (body && typeof body.source === 'string') ? body.source.trim().slice(0, 200) : '';
+  if (typeof html !== 'string' || !html.trim()) return json({ error: 'html manquant' }, 400);
+  if (typeof app !== 'string' || !/^https:\/\//i.test(app.trim()) || app.length > 200) return json({ error: 'app invalide (URL https attendue)' }, 400);
+  const size = new TextEncoder().encode(html).length;
+  if (size > MAX_APP_BYTES) return json({ error: 'Application trop volumineuse (10 Mo maximum)' }, 413);
+  const now = Date.now();
+  try {
+    await env.APP_STORE.put('app:' + id, html);
+    await env.APP_STORE.put('meta:' + id, '1', { metadata: { app: app.trim(), source: source, updated_at: now, size: size } });
+  } catch (e) {
+    return json({ error: 'Écriture KV impossible : ' + (e && e.message ? e.message : String(e)) }, 500);
+  }
+  return json({ stored: true, id: id, app: app.trim(), source: source, updated_at: now, size: size });
+}
+
+async function handleListApps(request, env) {
+  const auth = await checkAdmin(request, env);
+  if (!auth.ok) return auth.response;
+  if (!env.APP_STORE) return json({ error: 'Binding KV "APP_STORE" absent' }, 503);
+  try {
+    const apps = [];
+    let cursor;
+    for (let i = 0; i < 10; i++) {
+      const res = await env.APP_STORE.list({ prefix: 'meta:', cursor: cursor });
+      (res.keys || []).forEach(function (k) {
+        const m = k.metadata || {};
+        apps.push({ id: k.name.slice(5), app: m.app || null, source: m.source || null, updated_at: m.updated_at || null, size: m.size || 0 });
+      });
+      if (res.list_complete) break;
+      cursor = res.cursor;
+    }
+    return json({ apps: apps });
+  } catch (e) {
+    return json({ error: 'KV: ' + (e && e.message ? e.message : String(e)) }, 500);
+  }
+}
+
+async function handleDeleteApp(request, env, id) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const allowed = await checkRateLimit(env, ip, 'admin');
+  if (!allowed) return json({ error: 'Trop de tentatives' }, 429);
+  const auth = await checkAdmin(request, env);
+  if (!auth.ok) return auth.response;
+  if (!env.APP_STORE) return json({ error: 'Binding KV "APP_STORE" absent' }, 503);
+  await env.APP_STORE.delete('meta:' + id);
+  await env.APP_STORE.delete('app:' + id);
+  return json({ deleted: true, id: id });
 }
 
 async function handleCreateCode(request, env) {
@@ -1615,7 +1760,24 @@ export default {
         if (method === 'GET') return await handleListCodes(request, env, url);
         return json({ error: 'Méthode non autorisée' }, 405);
       }
+      if (path === '/admin/apps') {
+        if (method === 'GET') return await handleListApps(request, env);
+        return json({ error: 'Méthode non autorisée' }, 405);
+      }
       const parts = path.split('/');
+      if (parts.length === 3 && parts[1] === 'app' && parts[2]) {
+        if (method !== 'POST') return json({ error: 'Méthode non autorisée' }, 405);
+        const appId = cleanAppId(parts[2]);
+        if (!appId) return json({ error: 'Identifiant d\'application invalide' }, 400);
+        return await handleAppLoad(request, env, appId);
+      }
+      if (parts.length === 4 && parts[1] === 'admin' && parts[2] === 'apps' && parts[3]) {
+        const appId = cleanAppId(parts[3]);
+        if (!appId) return json({ error: 'Identifiant d\'application invalide' }, 400);
+        if (method === 'PUT') return await handlePutApp(request, env, appId);
+        if (method === 'DELETE') return await handleDeleteApp(request, env, appId);
+        return json({ error: 'Méthode non autorisée' }, 405);
+      }
       if (parts.length === 4 && parts[1] === 'admin' && parts[2] === 'codes' && parts[3]) {
         if (method === 'PUT') return await handleUpdateCode(request, env, parts[3]);
         if (method === 'DELETE') return await handleDeleteCode(request, env, parts[3]);
@@ -1656,7 +1818,8 @@ function openWorkerModal() {
     '</div>' +
     row('DB', 'Obligatoire', 'Binding D1 : base de données qui stocke les codes. Créez une base D1 et liez-la avec le nom de variable DB. Les tables sont créées automatiquement.') +
     row('ADMIN_TOKEN', 'Obligatoire', 'Secret : le mot de passe pour se connecter à Passcode. Utilisez 24 caractères ou plus.') +
-    row('GATE_PASSWORD', 'Optionnel', 'Secret : code universel toujours accepté, indépendant de la base. Pratique pour dépanner ; à ne pas donner aux utilisateurs.') +
+    row('APP_STORE', 'Obligatoire', 'Binding KV : stocke le code des applications payantes créées avec « Enfanter ». Créez un namespace KV et liez-le avec le nom de variable APP_STORE.') +
+    row('GATE_PASSWORD', 'Optionnel', 'Secret : code universel toujours accepté pour les apps avec module, indépendant de la base. Il n\'ouvre pas les applications payantes. Ne le donnez pas aux utilisateurs.') +
     row('AUTH_RATE_LIMIT', 'Optionnel', 'Binding KV : limite à 20 tentatives par minute et par IP contre le devinage de codes. Sans lui, aucune limite.') +
     '<div class="item-meta" style="font-size:11px;line-height:1.5;margin-top:10px;">' +
       'Test : ouvrez l’adresse du Worker suivie de /health, vous devez voir {"status":"ok"}.' +
@@ -1792,10 +1955,28 @@ async function ghLoadRepos() {
   }
 }
 function ghLabelOption(o) {
+  const ch = ghFindChild(o.value);
+  if (ch) {
+    o.dataset.child = '1';
+    o.dataset.source = ch.source || '';
+    o.dataset.appId = ch.id || '';
+  } else {
+    delete o.dataset.child;
+    delete o.dataset.source;
+    delete o.dataset.appId;
+  }
   o.textContent =
     (o.dataset.name || '') +
     (o.dataset.priv ? ' (privé)' : '') +
-    (o.dataset.protected === '1' ? ' · protégé' : '');
+    (ch ? ' · payant' : (o.dataset.protected === '1' ? ' · protégé' : ''));
+}
+function ghFindChild(url) {
+  const n = u => String(u || '').trim().toLowerCase().replace(/\/+$/, '');
+  const list = ghState.children || [];
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].app && n(list[i].app) === n(url)) return list[i];
+  }
+  return null;
 }
 async function ghCheckOption(o) {
   const marker = '<' + '!--PWC-GATE:START';
@@ -1818,7 +1999,18 @@ function ghUpdateRemoveBtn() {
   if (!sel || !btn) return;
 
   const opt = sel.options[sel.selectedIndex];
-  if (!opt || !opt.dataset.repo) {
+  const isRepo = !!(opt && opt.dataset.repo);
+  const isChild = isRepo && opt.dataset.child === '1';
+
+  const show = (id, v) => {
+    const el = byId(id);
+    if (el) el.classList.toggle('hidden', !v);
+  };
+  show('ghInstallBtn', !isChild);
+  show('ghChildBtn', !isChild);
+  show('ghSyncBtn', isChild);
+
+  if (!isRepo || isChild) {
     btn.classList.add('hidden');
     return;
   }
@@ -2160,8 +2352,8 @@ function ghSetProgress(pct, text, isErr) {
     t.style.color = isErr ? '#f87171' : '';
   }
 }
-async function ghWaitForPages(pagesUrl, id) {
-  const marker = 'PWC-GATE:START id=' + id;
+async function ghWaitForPages(pagesUrl, id, markerText) {
+  const marker = markerText || ('PWC-GATE:START id=' + id);
   const started = Date.now();
   const EXPECTED = 50000;
   const TIMEOUT = 300000;
@@ -2402,6 +2594,515 @@ async function ghRemoveModule() {
     ghState.busy = false;
     btn.disabled = false;
     removeBtn.disabled = false;
+  }
+}
+function ghSetBusy(b) {
+  ghState.busy = b;
+  ['ghInstallBtn', 'ghChildBtn', 'ghRemoveBtn', 'ghSyncBtn'].forEach(id => {
+    const el = byId(id);
+    if (el) el.disabled = b;
+  });
+}
+function ghHexRgb(h) {
+  h = String(h || '').trim();
+  let m = /^#([0-9a-f]{3})$/i.exec(h);
+  if (m) {
+    return [
+      parseInt(m[1][0] + m[1][0], 16),
+      parseInt(m[1][1] + m[1][1], 16),
+      parseInt(m[1][2] + m[1][2], 16)
+    ];
+  }
+  m = /^#([0-9a-f]{6})$/i.exec(h);
+  if (m) {
+    return [
+      parseInt(m[1].slice(0, 2), 16),
+      parseInt(m[1].slice(2, 4), 16),
+      parseInt(m[1].slice(4, 6), 16)
+    ];
+  }
+  return null;
+}
+function ghChildColors(manifest) {
+  const m = manifest || {};
+  const bg = ghHexRgb(m.background_color) || ghHexRgb(m.theme_color) || [11, 13, 18];
+  let acc = ghHexRgb(m.theme_color) || [99, 102, 241];
+  if (Math.max.apply(null, acc) - Math.min.apply(null, acc) < 40 || acc.join() === bg.join()) {
+    acc = [99, 102, 241];
+  }
+  const lum = c => (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 255;
+  const dark = lum(bg) < 0.5;
+  const hex = c => '#' + c.map(v => ('0' + v.toString(16)).slice(-2)).join('');
+
+  return {
+    bg: 'rgb(' + bg.join(',') + ')',
+    bgHex: hex(bg),
+    fg: dark ? '#f1f5f9' : '#0f172a',
+    card: dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.04)',
+    line: dark ? 'rgba(255,255,255,.16)' : 'rgba(0,0,0,.14)',
+    field: dark ? 'rgba(0,0,0,.3)' : 'rgba(255,255,255,.9)',
+    acc: 'rgb(' + acc.join(',') + ')',
+    accSoft: 'rgba(' + acc.join(',') + ',.16)',
+    accFg: lum(acc) > 0.6 ? '#0b0b0f' : '#ffffff'
+  };
+}
+function pwcChildLoader(WORKER, APP) {
+  var d = document;
+  var form = d.getElementById('f');
+  var input = d.getElementById('c');
+  var btn = d.getElementById('b');
+  var err = d.getElementById('e');
+
+  function deviceId() {
+    var k = 'pwc_device_id';
+    try {
+      var v = localStorage.getItem(k);
+      if (v && v.length >= 8) return v;
+      v = (window.crypto && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : (Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
+      localStorage.setItem(k, v);
+      return v;
+    } catch (e) {
+      return window.__pwcDev || (window.__pwcDev = Date.now().toString(36) + Math.random().toString(36).slice(2) + 'xx');
+    }
+  }
+
+  function setBusy(b) {
+    btn.disabled = b;
+    btn.textContent = b ? 'Vérification…' : 'Déverrouiller';
+  }
+
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var code = (input.value || '').trim();
+    err.textContent = '';
+    if (!code) { err.textContent = 'Saisissez votre code'; return; }
+    setBusy(true);
+
+    fetch(WORKER + '/app/' + encodeURIComponent(APP), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: code, device: deviceId() })
+    })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          return { status: r.status, ok: r.ok, data: j };
+        });
+      })
+      .then(function (res) {
+        var j = res.data || {};
+        if (j.valid === true && typeof j.html === 'string') {
+          d.open();
+          d.write(j.html);
+          d.close();
+          return;
+        }
+        if (res.status === 429) throw new Error('Trop de tentatives, réessayez dans une minute');
+        input.value = '';
+        if (j.reason === 'device_limit') err.textContent = 'Code déjà utilisé sur un autre appareil';
+        else if (j.reason === 'wrong_app') err.textContent = 'Ce code ne donne pas accès à cette application';
+        else if (j.reason === 'unknown_app' || j.reason === 'unavailable') err.textContent = 'Application indisponible';
+        else if (!res.ok && j.error) err.textContent = j.error;
+        else err.textContent = 'Code invalide';
+        input.focus();
+      })
+      .catch(function (ex) {
+        err.textContent = (ex instanceof TypeError)
+          ? 'Connexion impossible. Un accès réseau est nécessaire.'
+          : (ex.message || 'Erreur');
+      })
+      .then(function () {
+        if (btn.isConnected) setBusy(false);
+      });
+  });
+
+  input.focus();
+}
+function ghBuildLoader(base, id, title, manifest, hasManifest, iconName) {
+  const c = ghChildColors(manifest);
+  const lt = '<';
+  const safe = s => JSON.stringify(s).replace(/</g, '\\u003c');
+
+  const css =
+    '*{box-sizing:border-box}html,body{margin:0;height:100%}' +
+    'body{display:flex;align-items:center;justify-content:center;padding:20px;background:' + c.bg + ';color:' + c.fg + ';font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}' +
+    '.card{width:100%;max-width:360px;padding:26px 22px;border-radius:18px;text-align:center;background:' + c.card + ';border:1px solid ' + c.line + '}' +
+    '.ic{width:52px;height:52px;margin:0 auto 14px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:' + c.accSoft + ';color:' + c.acc + '}' +
+    '.t{font-size:18px;font-weight:800;margin:0 0 4px}' +
+    '.s{font-size:12px;margin:0 0 18px;opacity:.6}' +
+    'input{display:block;width:100%;height:46px;padding:0 14px;margin:0 0 10px;border-radius:12px;border:1px solid ' + c.line + ';background:' + c.field + ';color:inherit;font-size:16px;outline:none;text-align:center;letter-spacing:.08em}' +
+    'input:focus{border-color:' + c.acc + '}' +
+    'button{display:block;width:100%;height:46px;border:0;border-radius:12px;background:' + c.acc + ';color:' + c.accFg + ';font-size:14px;font-weight:800;cursor:pointer}' +
+    'button:disabled{opacity:.55;cursor:wait}' +
+    '.e{min-height:18px;margin-top:10px;font-size:12px;font-weight:700;color:#f87171}';
+
+  const head =
+    '<meta charset="UTF-8">\n' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">\n' +
+    '<title>' + escapeHtml(title) + '</title>\n' +
+    '<meta name="theme-color" content="' + c.bgHex + '">\n' +
+    '<meta name="apple-mobile-web-app-capable" content="yes">\n' +
+    '<meta name="apple-mobile-web-app-title" content="' + escapeHtml(title) + '">\n' +
+    (hasManifest ? '<link rel="manifest" href="./manifest.json">\n' : '') +
+    (iconName ? '<link rel="icon" href="./' + iconName + '">\n<link rel="apple-touch-icon" href="./' + iconName + '">\n' : '') +
+    lt + '!--PWC-CHILD id=' + id + '-->\n';
+
+  const lock = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+
+  const body =
+    '<form id="f" class="card" autocomplete="off" novalidate>' +
+      '<div class="ic">' + lock + '</div>' +
+      '<div class="t">' + escapeHtml(title) + '</div>' +
+      '<div class="s">Saisissez votre code d\'accès</div>' +
+      '<input id="c" type="password" placeholder="Code d\'accès" autocomplete="off" autocapitalize="off" spellcheck="false">' +
+      '<button id="b" type="submit">Déverrouiller</button>' +
+      '<div id="e" class="e" role="alert"></div>' +
+    '</form>';
+
+  return '<!DOCTYPE html>\n<html lang="fr">\n<head>\n' + head +
+    lt + 'style>' + css + lt + '/style>\n</head>\n<body>\n' + body + '\n' +
+    lt + 'script>(' + pwcChildLoader.toString() + ')(' + safe(base) + ',' + safe(id) + ');' + lt + '/script>\n' +
+    '</body>\n</html>\n';
+}
+async function ghCollectAssets(full, info) {
+  const listPath = info.apiPath.replace(/\/?index\.html$/, '');
+  const items = await ghApi(listPath + '?ref=' + encodeURIComponent(info.branch));
+  const files = (Array.isArray(items) ? items : []).filter(it => it.type === 'file' && it.size <= 2000000);
+
+  const getB64 = async it => {
+    const blob = await ghApi('/repos/' + full + '/git/blobs/' + it.sha);
+    return String(blob.content || '').replace(/\s/g, '');
+  };
+
+  const manifestItem = files.find(it => it.name.toLowerCase() === 'manifest.json');
+  const wanted = new Set();
+  let manifest = null;
+  let manifestB64 = '';
+
+  if (manifestItem) {
+    manifestB64 = await getB64(manifestItem);
+    try {
+      manifest = JSON.parse(ghB64ToText(manifestB64));
+      (manifest.icons || []).forEach(i => {
+        if (i && typeof i.src === 'string') wanted.add(i.src.split('?')[0].split('/').pop());
+      });
+    } catch (e) {
+      manifest = null;
+    }
+  }
+
+  const pattern = /^(icon[\w.-]*\.(png|ico|svg|webp)|favicon[\w.-]*|apple-touch-icon[\w.-]*\.png|splash[\w.-]*\.png)$/i;
+  const out = [];
+
+  for (const it of files) {
+    if (it === manifestItem) continue;
+    if (it.name.toLowerCase() === 'index.html') continue;
+    if (!(pattern.test(it.name) || wanted.has(it.name))) continue;
+    out.push({ name: it.name, b64: await getB64(it) });
+  }
+
+  if (manifestItem) {
+    if (manifest) {
+      manifest.start_url = './';
+      manifest.scope = './';
+      manifest.id = './';
+      (manifest.icons || []).forEach(i => {
+        if (i && typeof i.src === 'string') i.src = './' + i.src.split('?')[0].split('/').pop();
+      });
+      out.push({ name: 'manifest.json', b64: ghTextToB64(JSON.stringify(manifest, null, 2)) });
+    } else {
+      out.push({ name: 'manifest.json', b64: manifestB64 });
+    }
+  }
+
+  const iconFile = out.find(f => /icon/i.test(f.name) && /\.png$/i.test(f.name));
+
+  return {
+    files: out,
+    manifest: manifest,
+    hasManifest: !!manifestItem,
+    icon: iconFile ? iconFile.name : ''
+  };
+}
+async function ghPutNew(full, path, b64, branch, message) {
+  const apiPath = '/repos/' + full + '/contents/' + path.split('/').map(encodeURIComponent).join('/');
+  let last;
+  for (let i = 0; i < 5; i++) {
+    try {
+      return await ghApi(apiPath, {
+        method: 'PUT',
+        body: { message: message, content: b64, branch: branch }
+      });
+    } catch (e) {
+      last = e;
+      if (e.status !== 404 && e.status !== 409) throw e;
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+  throw last;
+}
+async function ghWorkerPutApp(id, html, appUrl, source) {
+  const base = workerUrl().replace(/\/+$/, '');
+  const resp = await fetch(base + '/admin/apps/' + encodeURIComponent(id), {
+    method: 'PUT',
+    headers: {
+      'Authorization': 'Bearer ' + adminToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ html: html, app: appUrl, source: source })
+  });
+  const data = await resp.json().catch(() => ({}));
+  log('Worker app ' + id + ' → ' + resp.status, resp.ok ? 'ok' : 'warn');
+  if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+  return data;
+}
+async function ghLoadChildren() {
+  if (!adminToken) return;
+  const base = workerUrl().replace(/\/+$/, '');
+  if (!base) return;
+
+  try {
+    const resp = await fetch(base + '/admin/apps', {
+      headers: { 'Authorization': 'Bearer ' + adminToken }
+    });
+    if (!resp.ok) {
+      log('Applications payantes : HTTP ' + resp.status + ' (binding APP_STORE ou Worker non à jour ?)', 'warn');
+      return;
+    }
+    const data = await resp.json();
+    ghState.children = (data && data.apps) || [];
+    log(ghState.children.length + ' application(s) payante(s)', 'ok');
+  } catch (e) {
+    log('Applications payantes : ' + (e.message || e), 'warn');
+    return;
+  }
+
+  const sel = byId('appUrl');
+  if (sel) {
+    Array.from(sel.options).filter(o => o.dataset.repo).forEach(ghLabelOption);
+    ghUpdateRemoveBtn();
+  }
+}
+function openChildModal() {
+  const sel = byId('appUrl');
+  const opt = sel.options[sel.selectedIndex];
+  const full = opt && opt.dataset.repo;
+  if (!full) { toast('Choisissez une application', true); return; }
+  if (!adminToken) { toast('Non authentifié', true); return; }
+
+  const suggested = (opt.dataset.name || 'app').replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 56) + '-pro';
+
+  byId('modalTitle').textContent = 'Enfanter ' + (opt.dataset.name || '');
+
+  byId('modalBody').innerHTML =
+    '<div class="item-meta" style="font-size:11px;line-height:1.5;margin-bottom:12px;">' +
+      'Crée un repo public qui ne contient qu\'un écran de saisie. Le code de l\'application est stocké dans le Worker et livré uniquement avec un code valide. ' +
+      'L\'original reste inchangé : tant qu\'il est public, son code reste lisible.' +
+    '</div>' +
+    '<label for="childName">Nom du repo enfant</label>' +
+    '<input id="childName" type="text" maxlength="63" value="' + escapeHtml(suggested) + '" autocomplete="off" spellcheck="false" style="width:100%;margin-top:5px;">' +
+    '<div class="item-meta" style="font-size:10px;margin-top:6px;">Lettres, chiffres, - et _ uniquement. Ce nom sert aussi d\'identifiant dans le Worker.</div>';
+
+  const actions = byId('modalActions');
+  actions.innerHTML = '';
+
+  const goBtn = document.createElement('button');
+  goBtn.className = 'primary';
+  goBtn.style.flex = '1';
+  goBtn.textContent = 'Créer l\'enfant';
+  goBtn.onclick = ghEnfanter;
+  actions.appendChild(goBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'small';
+  closeBtn.textContent = 'Fermer';
+  closeBtn.onclick = closeCodeModal;
+  actions.appendChild(closeBtn);
+
+  byId('codeModal').classList.remove('hidden');
+  const input = byId('childName');
+  if (input) input.focus();
+}
+async function ghEnfanter() {
+  if (ghState.busy) return;
+
+  const name = (byId('childName').value || '').trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/.test(name)) {
+    toast('Nom : lettres, chiffres, - et _ (63 max)', true);
+    return;
+  }
+
+  const sel = byId('appUrl');
+  const opt = sel.options[sel.selectedIndex];
+  const full = opt && opt.dataset.repo;
+  if (!full) { toast('Choisissez une application', true); return; }
+  if (!adminToken) { toast('Non authentifié', true); return; }
+
+  const base = workerUrl().replace(/\/+$/, '');
+  if (!base) { toast('URL du Worker manquante', true); return; }
+
+  closeCodeModal();
+
+  const openBtn = byId('ghOpenBtn');
+  ghSetBusy(true);
+  ghState.openUrl = '';
+  openBtn.classList.add('hidden');
+
+  let uploaded = false;
+  let created = false;
+
+  try {
+    ghSetProgress(0, 'Lecture de l\'original…');
+    log('Enfanter : lecture de ' + full, 'info');
+
+    const info = await ghReadIndex(full, opt.dataset.branch || 'main');
+    const html = ghStripModule(info.text);
+
+    const tm = /<title[^>]*>([^<]*)<\/title>/i.exec(info.text);
+    const title = (tm && tm[1].trim()) || opt.dataset.name || name;
+
+    const me = await ghApi('/user');
+    const owner = me.login;
+    const childFull = owner + '/' + name;
+    const childUrl = 'https://' + owner.toLowerCase() + '.github.io/' + name + '/';
+
+    let exists = true;
+    try {
+      await ghApi('/repos/' + childFull);
+    } catch (e) {
+      if (e.status === 404) exists = false;
+      else throw e;
+    }
+    if (exists) throw new Error('Un repo nommé ' + name + ' existe déjà');
+
+    ghSetProgress(0, 'Envoi de l\'application au Worker…');
+    await ghWorkerPutApp(name, html, childUrl, full);
+    uploaded = true;
+
+    ghSetProgress(0, 'Copie du manifest et des icônes…');
+    const assets = await ghCollectAssets(full, info);
+
+    ghSetProgress(0, 'Création du repo ' + name + '…');
+    const repo = await ghApi('/user/repos', {
+      method: 'POST',
+      body: {
+        name: name,
+        description: 'Version protégée par Passcode',
+        private: false,
+        auto_init: true
+      }
+    });
+    created = true;
+    const branch = repo.default_branch || 'main';
+    log('Repo créé : ' + repo.full_name, 'ok');
+
+    ghSetProgress(0, 'Envoi de l\'écran de saisie…');
+    const loader = ghBuildLoader(base, name, title, assets.manifest, assets.hasManifest, assets.icon);
+    const sw =
+      "self.addEventListener('install', function () { self.skipWaiting(); });\n" +
+      "self.addEventListener('activate', function (e) { e.waitUntil(self.clients.claim()); });\n" +
+      "self.addEventListener('fetch', function () {});\n";
+
+    await ghPutNew(repo.full_name, 'index.html', ghTextToB64(loader), branch, 'Écran de saisie (Passcode)');
+    await ghPutNew(repo.full_name, 'sw.js', ghTextToB64(sw), branch, 'Service worker minimal (Passcode)');
+    for (const f of assets.files) {
+      await ghPutNew(repo.full_name, f.name, f.b64, branch, 'Ajout de ' + f.name);
+    }
+
+    ghSetProgress(0, 'Activation de GitHub Pages…');
+    try {
+      await ghApi('/repos/' + repo.full_name + '/pages', {
+        method: 'POST',
+        body: { source: { branch: branch, path: '/' } }
+      });
+    } catch (e) {
+      if (e.status !== 409) throw e;
+    }
+
+    const ready = await ghWaitForPages(childUrl, name, 'PWC-CHILD id=' + name);
+
+    if (ready) {
+      ghSetProgress(100, 'Application payante publiée');
+      log('Enfant publié : ' + childUrl, 'ok');
+      toast('Application payante créée');
+      openBtn.textContent = 'Ouvrir l\'application';
+    } else {
+      ghSetProgress(95, 'Publication non confirmée après 5 min (peut être encore en cours)', true);
+      log('Enfant : publication non confirmée après 5 min', 'warn');
+      toast('Publication non confirmée', true);
+      openBtn.textContent = 'Ouvrir quand même';
+    }
+
+    ghState.openUrl = childUrl;
+    openBtn.classList.remove('hidden');
+
+    await ghLoadChildren();
+    await ghLoadRepos();
+    selectApp(childUrl);
+
+  } catch (e) {
+    if (uploaded && !created) {
+      try {
+        await fetch(base + '/admin/apps/' + encodeURIComponent(name), {
+          method: 'DELETE',
+          headers: { 'Authorization': 'Bearer ' + adminToken }
+        });
+      } catch (x) {}
+    }
+    const hint = created ? ' (le repo ' + name + ' a été créé : supprimez-le sur GitHub avant de réessayer)' : '';
+    ghSetProgress(0, 'Échec : ' + (e.message || e) + hint, true);
+    log('Erreur enfantement : ' + (e.message || e), 'err');
+    toast('Enfantement impossible : ' + (e.message || ''), true);
+  } finally {
+    ghSetBusy(false);
+  }
+}
+async function ghSync() {
+  if (ghState.busy) return;
+
+  const sel = byId('appUrl');
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt || opt.dataset.child !== '1') { toast('Choisissez une application payante', true); return; }
+
+  const source = opt.dataset.source;
+  const id = opt.dataset.appId;
+  if (!source || !id) { toast('Original inconnu pour cette application', true); return; }
+  if (!adminToken) { toast('Non authentifié', true); return; }
+
+  const confirmed = await confirmDialog(
+    'Mettre à jour ' + id + ' depuis ' + source + ' ?\nLa nouvelle version est servie aux utilisateurs dès leur prochaine ouverture.',
+    'Synchroniser'
+  );
+  if (!confirmed) return;
+
+  const openBtn = byId('ghOpenBtn');
+  ghSetBusy(true);
+  openBtn.classList.add('hidden');
+
+  try {
+    ghSetProgress(10, 'Lecture de l\'original…');
+    log('Synchronisation : lecture de ' + source, 'info');
+
+    const info = await ghReadIndex(source, 'main');
+    const html = ghStripModule(info.text);
+
+    ghSetProgress(60, 'Envoi au Worker…');
+    await ghWorkerPutApp(id, html, opt.value, source);
+
+    ghSetProgress(100, 'Application synchronisée');
+    log('Synchronisation terminée : ' + id, 'ok');
+    toast('Application synchronisée');
+
+    ghState.openUrl = opt.value;
+    openBtn.textContent = 'Ouvrir l\'application';
+    openBtn.classList.remove('hidden');
+  } catch (e) {
+    ghSetProgress(0, 'Échec : ' + (e.message || e), true);
+    log('Erreur synchronisation : ' + (e.message || e), 'err');
+    toast('Synchronisation impossible : ' + (e.message || ''), true);
+  } finally {
+    ghSetBusy(false);
   }
 }
 
