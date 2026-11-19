@@ -293,6 +293,7 @@
 </div>
 <button class="small" style="width:100%;margin-top:8px;" onclick="shareNewCode()">Partager (WhatsApp, SMS…)</button>
     </div>
+<button id="flashBtn" style="width:100%;margin-top:10px;" onclick="ghFlash()">Flash : copier le brief pour l'IA</button>
 <div id="ghPanel" class="hidden" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06);">
   <button id="ghInstallBtn" class="primary" style="width:100%;" onclick="ghInstall()">Installer le module dans l'application choisie</button>
   <button id="ghChildBtn" style="width:100%;margin-top:8px;" onclick="openChildModal()">Enfanter (version payante protégée)</button>
@@ -3300,6 +3301,48 @@ async function ghSync() {
     toast('Synchronisation impossible : ' + (e.message || ''), true);
   } finally {
     ghSetBusy(false);
+  }
+}
+async function ghFlash() {
+  const base = workerUrl();
+  if (!base) { toast('URL du Worker manquante', true); return; }
+
+  const prompt = [
+    'Tu es un développeur web expert. Je travaille avec toi sur un code et je veux y ajouter une demande de code d\'accès (mot de passe) à un endroit précis, décrit tout en bas de ce message.',
+    '',
+    'API DE VÉRIFICATION (Worker Cloudflare, CORS déjà ouvert, aucun en-tête d\'authentification)',
+    'POST ' + base + '/verify',
+    'Content-Type: application/json',
+    'Body : {"code":"<code saisi>","device":"<identifiant appareil>"}',
+    'Réponses :',
+    '- {"valid":true} : accès autorisé',
+    '- {"valid":false} : code invalide, expiré ou révoqué',
+    '- {"valid":false,"reason":"device_limit"} : code déjà utilisé sur un autre appareil',
+    '- HTTP 429 : trop de tentatives',
+    '- Erreur réseau ou autre statut : ne PAS laisser passer',
+    '',
+    'IDENTIFIANT D\'APPAREIL (obligatoire)',
+    'Générer une fois un UUID (crypto.randomUUID, avec un repli aléatoire), le garder dans localStorage sous la clé exacte "pwc_device_id" (repli en mémoire si localStorage échoue) et l\'envoyer dans "device" à chaque vérification. Cette clé est partagée entre mes applications.',
+    '',
+    'RÈGLES',
+    '1. Ne jamais stocker le code saisi (ni localStorage, ni cookie, ni sessionStorage) : il est redemandé à chaque fois que la demande s\'affiche.',
+    '2. Tant que valid n\'est pas true, ce que la demande protège ne doit pas s\'exécuter ni s\'afficher : bloque l\'étape elle-même, ne te contente pas de la masquer en CSS.',
+    '3. Messages en français : "Code invalide", "Code déjà utilisé sur un autre appareil", "Trop de tentatives, réessayez dans une minute", "Connexion impossible. Vérifiez votre réseau.".',
+    '4. Le design de la demande de code doit reprendre fidèlement les couleurs, la police et les arrondis du code existant.',
+    '5. Ne change rien d\'autre que ce que je demande : pas de refactorisation, pas de renommage, pas d\'amélioration non demandée. Le code doit rester lisible et bien indenté.',
+    '6. Réponds uniquement avec les parties de code modifiées ou ajoutées, complètes et sans abréger.',
+    '',
+    'MA DEMANDE (où et comment le code doit être demandé) :',
+    ''
+  ].join('\n');
+
+  try {
+    await navigator.clipboard.writeText(prompt);
+    log('Flash : brief copié', 'ok');
+    toast('Brief copié : collez-le dans votre IA puis décrivez votre demande');
+  } catch (e) {
+    log('Flash : copie impossible (' + (e.message || e) + ')', 'err');
+    toast('Copie impossible', true);
   }
 }
 
